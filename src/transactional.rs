@@ -356,10 +356,10 @@ fn remove_best_effort(path: &Path) {
 /// Best-effort directory fsync after the rename (POSIX semantics; on
 /// platforms where directories cannot be opened this is a no-op).
 fn sync_directory_best_effort(directory: Option<&Path>) {
-    if let Some(directory) = directory {
-        if let Ok(dir_file) = File::open(directory) {
-            let _ = dir_file.sync_all();
-        }
+    if let Some(directory) = directory
+        && let Ok(dir_file) = File::open(directory)
+    {
+        let _ = dir_file.sync_all();
     }
 }
 
@@ -407,7 +407,7 @@ mod tests {
             .unwrap()
             .flatten()
             .map(|entry| entry.path())
-            .filter(|path| path.file_name().is_some_and(|name| is_temp_file_name(name)))
+            .filter(|path| path.file_name().is_some_and(is_temp_file_name))
             .collect()
     }
 
