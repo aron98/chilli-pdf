@@ -19,9 +19,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      # rust-toolchain.toml pins the exact toolchain, so make sure it is
-      # installed (with the component this job needs) before running cargo.
-      - run: rustup toolchain install -c rustfmt
+      # rust-toolchain.toml pins the exact toolchain; auto-install uses a
+      # minimal profile, so add the fmt component explicitly.
+      - run: rustup toolchain install && rustup component add rustfmt
       - run: cargo fmt --check
 
   build:
@@ -34,9 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      # rust-toolchain.toml pins the exact toolchain; clippy is needed for the
-      # lint step below, so install it up front.
-      - run: rustup toolchain install -c clippy
+      # rust-toolchain.toml pins the exact toolchain; auto-install uses a
+      # minimal profile, so add the clippy component explicitly.
+      - run: rustup toolchain install && rustup component add clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked
       - run: cargo test --locked
