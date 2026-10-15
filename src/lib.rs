@@ -5,6 +5,7 @@
 //! milestone by milestone — see the issue tracker. Everything in this crate
 //! must compile and pass tests on Windows, macOS, and Linux.
 
+pub mod assets;
 pub mod language;
 pub mod output_path;
 
