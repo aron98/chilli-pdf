@@ -483,13 +483,7 @@ mod tests {
         // only the byte counts, never the bytes themselves.
         let mut pdf = minimal_pdf();
         pdf.extend_from_slice(SECRET.as_bytes());
-        let err = validate_bytes(
-            &pdf,
-            &ValidationConfig {
-                max_size_bytes: 10,
-            },
-        )
-        .unwrap_err();
+        let err = validate_bytes(&pdf, &ValidationConfig { max_size_bytes: 10 }).unwrap_err();
         assert!(
             matches!(err, ValidationError::TooLarge { .. }),
             "oversized fixture must classify as TooLarge"
