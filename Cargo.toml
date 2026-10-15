@@ -1,0 +1,21 @@
+[package]
+name = "chilli-pdf"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+description = "Offline tool that turns scanned PDFs into searchable PDFs with selectable, copyable text"
+readme = "README.md"
+license = "MIT"
+repository = "https://github.com/aron98/chilli-pdf"
+keywords = ["pdf", "ocr", "tesseract", "pdfium", "searchable"]
+categories = ["gui", "text-processing"]
+
+# Intentionally dependency-free while the project is a scaffold. The
+# conversion pipeline (eframe GUI, PDFium binding, Tesseract OCR) is added
+# milestone by milestone — see the issue tracker and docs/architecture.md.
+[dependencies]
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+panic = "abort"

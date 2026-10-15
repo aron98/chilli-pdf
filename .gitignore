@@ -1,0 +1,18 @@
+# Rust
+/target
+**/*.rs.bk
+
+# Bundled runtime payloads (built by `xtask`), not source-controlled
+/assets
+/dist
+
+# Local experiments and scratch output
+/scratch
+*.log
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+
+# Agent / session state
+.opencode/

@@ -1,0 +1,73 @@
+name: Release
+
+# Builds per-OS release artifacts for version tags (v*).
+# Bundling of native libraries and OCR models is milestone work; until
+# then this workflow ships the raw binary so packaging end-to-end is proven.
+# Tag pushes are restricted by the repository's tag-protection ruleset.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: chilli-pdf-windows-x64
+            binary: chilli-pdf.exe
+            archive: zip
+          - os: macos-latest
+            artifact: chilli-pdf-macos
+            binary: chilli-pdf
+            archive: tar.gz
+          - os: ubuntu-latest
+            artifact: chilli-pdf-linux-x64
+            binary: chilli-pdf
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p "dist/${{ matrix.artifact }}"
+          cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}/"
+          cp LICENSE THIRD_PARTY_NOTICES.md README.md "dist/${{ matrix.artifact }}/"
+          cd dist
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
+          else
+            tar -czf "${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
+          fi
+          sha256sum "${{ matrix.artifact }}".* > "${{ matrix.artifact }}.SHA256SUMS"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: dist/*

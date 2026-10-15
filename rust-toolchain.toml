@@ -1,0 +1,3 @@
+[toolchain]
+# Pinned for reproducible builds. Bump via a dedicated PR.
+channel = "1.96.0"
