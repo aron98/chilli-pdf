@@ -7,6 +7,8 @@
 
 pub mod language;
 pub mod output_path;
+pub mod transactional;
+pub mod validation;
 
 /// Application version, mirrored from Cargo so the GUI and CLI agree.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
