@@ -379,8 +379,8 @@ pub fn verify_embedded_bundle() -> Result<(), AssetError> {
 fn collect_bundle_names(dir: &Dir<'_>, out: &mut Vec<String>) {
     for entry in dir.entries() {
         match entry {
-            include_dir::Entry::Dir(sub) => collect_bundle_names(sub, out),
-            include_dir::Entry::File(file) => {
+            include_dir::DirEntry::Dir(sub) => collect_bundle_names(sub, out),
+            include_dir::DirEntry::File(file) => {
                 let name = file
                     .path()
                     .to_string_lossy()
