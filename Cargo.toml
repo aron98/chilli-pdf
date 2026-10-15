@@ -19,3 +19,6 @@ categories = ["gui", "text-processing"]
 lto = "thin"
 strip = "symbols"
 panic = "abort"
+
+[dev-dependencies]
+pdfium-render = "0.9"
