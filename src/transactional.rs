@@ -415,7 +415,7 @@ mod tests {
         fs::read(path).unwrap()
     }
 
-    /// Bytes with an explicit `&[u8]` type so `&mut &CONTENT` coerces to
+    /// Bytes with an explicit `&[u8]` type so `&mut content` coerces to
     /// `&mut dyn DocumentWriter` via the `impl for &[u8]`.
     const CONTENT: &[u8] = b"%PDF-1.4 converted document bytes";
 
@@ -423,8 +423,9 @@ mod tests {
     fn successful_write_publishes_exactly_the_document_bytes() {
         let dir = scratch_dir("success");
         let dest = dir.join("out_searchable.pdf");
+        let mut content = CONTENT;
 
-        write_document_transactionally(&dest, &mut &CONTENT, IfExists::Refuse).unwrap();
+        write_document_transactionally(&dest, &mut content, IfExists::Refuse).unwrap();
 
         assert_eq!(sink_file(&dest), CONTENT);
         assert!(leftover_temps(&dir).is_empty());
@@ -487,10 +488,11 @@ mod tests {
     fn existing_destination_is_refused_without_confirmation() {
         let dir = scratch_dir("refuse");
         let dest = dir.join("out_searchable.pdf");
+        let mut content = CONTENT;
         fs::write(&dest, b"previous document").unwrap();
 
         let err =
-            write_document_transactionally(&dest, &mut &CONTENT, IfExists::Refuse).unwrap_err();
+            write_document_transactionally(&dest, &mut content, IfExists::Refuse).unwrap_err();
 
         assert!(matches!(err, TransactionError::DestinationExists(_)));
         assert_eq!(sink_file(&dest), b"previous document");
@@ -501,9 +503,10 @@ mod tests {
     fn existing_destination_is_replaced_after_confirmation() {
         let dir = scratch_dir("replace");
         let dest = dir.join("out_searchable.pdf");
+        let mut content = CONTENT;
         fs::write(&dest, b"previous document").unwrap();
 
-        write_document_transactionally(&dest, &mut &CONTENT, IfExists::Replace).unwrap();
+        write_document_transactionally(&dest, &mut content, IfExists::Replace).unwrap();
 
         assert_eq!(sink_file(&dest), CONTENT);
         assert!(leftover_temps(&dir).is_empty());
@@ -512,10 +515,11 @@ mod tests {
     #[test]
     fn unwritable_destination_reports_a_clear_error() {
         let dir = scratch_dir("unwritable");
+        let mut content = CONTENT;
         let dest = dir.join("no such folder").join("out_searchable.pdf");
 
         let err =
-            write_document_transactionally(&dest, &mut &CONTENT, IfExists::Refuse).unwrap_err();
+            write_document_transactionally(&dest, &mut content, IfExists::Refuse).unwrap_err();
 
         assert!(matches!(err, TransactionError::UnwritableDestination(_)));
         assert!(!dest.exists());
@@ -525,9 +529,10 @@ mod tests {
     #[test]
     fn unicode_and_dotfile_destinations_are_handled() {
         let dir = scratch_dir("unicode");
+        let mut content = CONTENT;
         for name in ["Magyar szöveg_searchable.pdf", ".hidden_searchable.pdf"] {
             let dest = dir.join(name);
-            write_document_transactionally(&dest, &mut &CONTENT, IfExists::Refuse).unwrap();
+            write_document_transactionally(&dest, &mut content, IfExists::Refuse).unwrap();
             assert_eq!(sink_file(&dest), CONTENT, "destination {name}");
         }
         assert!(leftover_temps(&dir).is_empty());
@@ -553,9 +558,10 @@ mod tests {
         let dir = scratch_dir("same-input");
         let input = dir.join("in.pdf");
         fs::write(&input, CONTENT).unwrap();
+        let mut content = CONTENT;
 
         for policy in [IfExists::Refuse, IfExists::Replace] {
-            let err = publish_document(&input, &input, &mut &CONTENT, policy).unwrap_err();
+            let err = publish_document(&input, &input, &mut content, policy).unwrap_err();
             assert!(
                 matches!(err, PublishError::Conflict(Conflict::SameAsInput)),
                 "input can never be the destination"
@@ -571,10 +577,11 @@ mod tests {
         let output = dir.join("in_searchable.pdf");
         fs::write(&input, b"input document").unwrap();
         fs::write(&output, b"old output").unwrap();
+        let mut content = CONTENT;
 
         // Refuse (user has not confirmed): conflict surfaces, nothing
         // is written.
-        let err = publish_document(&input, &output, &mut &CONTENT, IfExists::Refuse).unwrap_err();
+        let err = publish_document(&input, &output, &mut content, IfExists::Refuse).unwrap_err();
         assert!(matches!(
             err,
             PublishError::Conflict(Conflict::AlreadyExists(_))
@@ -582,7 +589,7 @@ mod tests {
         assert_eq!(sink_file(&output), b"old output");
 
         // Replace (user confirmed): new content lands atomically.
-        publish_document(&input, &output, &mut &CONTENT, IfExists::Replace).unwrap();
+        publish_document(&input, &output, &mut content, IfExists::Replace).unwrap();
         assert_eq!(sink_file(&output), CONTENT);
         assert!(leftover_temps(&dir).is_empty());
     }
@@ -590,11 +597,12 @@ mod tests {
     #[test]
     fn publish_writes_fresh_outputs_without_conflicts() {
         let dir = scratch_dir("fresh");
+        let mut content = CONTENT;
         let input = dir.join("in.pdf");
         let output = dir.join("in_searchable.pdf");
         fs::write(&input, b"input document").unwrap();
 
-        publish_document(&input, &output, &mut &CONTENT, IfExists::Refuse).unwrap();
+        publish_document(&input, &output, &mut content, IfExists::Refuse).unwrap();
 
         assert_eq!(sink_file(&output), CONTENT);
         assert!(leftover_temps(&dir).is_empty());

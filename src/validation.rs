@@ -295,15 +295,14 @@ fn contains_token(haystack: &[u8], needle: &[u8]) -> bool {
 /// dictionaries, `/SigFlags` in interactive forms, and PKCS signature
 /// payload formats leave behind in uncompressed regions.
 fn looks_signed(bytes: &[u8]) -> bool {
-    [
+    let tokens: [&[u8]; 5] = [
         b"/ByteRange",
         b"/SigFlags",
         b"adbe.pkcs7",
         b"adbe.x509",
         b"ETSI.CAdES",
-    ]
-    .iter()
-    .any(|token| contains_token(bytes, token))
+    ];
+    tokens.iter().any(|token| contains_token(bytes, token))
 }
 
 #[cfg(test)]
