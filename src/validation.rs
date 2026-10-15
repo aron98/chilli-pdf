@@ -323,30 +323,32 @@ mod tests {
             .to_vec()
     }
 
+    /// Minimal PDF whose trailer carries an encryption dictionary entry.
     fn encrypted_pdf() -> Vec<u8> {
-        let mut pdf = minimal_pdf();
-        let marker = b"<< /Size 1 /Root 1 0 R >>\n";
-        let replacement = b"<< /Size 1 /Root 1 0 R /Encrypt 5 0 R >>\n";
-        let pos = find(&pdf, marker).expect("trailer present in fixture");
-        pdf.splice(pos..pos + marker.len(), replacement.iter().copied());
-        pdf
+        b"%PDF-1.4\n\
+          1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n\
+          2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n\
+          xref\n0 1\n0000000000 65535 f\n\
+          trailer\n<< /Size 1 /Root 1 0 R /Encrypt 5 0 R >>\n\
+          startxref\n9\n\
+          %%EOF\n"
+            .to_vec()
     }
 
+    /// Minimal PDF whose trailer carries an AcroForm signature flag.
     fn signed_pdf() -> Vec<u8> {
-        let mut pdf = minimal_pdf();
-        let marker = b"<< /Size 1 /Root 1 0 R >>\n";
-        let replacement = b"<< /Size 1 /Root 1 0 R /SigFlags 3 >>\n";
-        let pos = find(&pdf, marker).expect("trailer present in fixture");
-        pdf.splice(pos..pos + marker.len(), replacement.iter().copied());
-        pdf
+        b"%PDF-1.4\n\
+          1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n\
+          2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n\
+          xref\n0 1\n0000000000 65535 f\n\
+          trailer\n<< /Size 1 /Root 1 0 R /SigFlags 3 >>\n\
+          startxref\n9\n\
+          %%EOF\n"
+            .to_vec()
     }
 
     fn truncated_header_only() -> Vec<u8> {
         b"%PDF-1.7 this file was cut off mid-download".to_vec()
-    }
-
-    fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-        haystack.windows(needle.len()).position(|w| w == needle)
     }
 
     fn cfg() -> ValidationConfig {
@@ -462,14 +464,38 @@ mod tests {
 
     #[test]
     fn error_messages_never_leak_document_contents() {
-        // The buffer embeds a recognizable secret; the message must not
-        // reproduce it.
+        const SECRET: &str = "TOP-SECRET-DOCUMENT-CONTENT-987654321";
+        // Every variant's message is fixed text: the secret embedded in
+        // the document must never be able to reach the user.
+        let variants = [
+            ValidationError::Encrypted,
+            ValidationError::DigitallySigned,
+            ValidationError::Malformed,
+            ValidationError::TooLarge {
+                actual_bytes: 11,
+                limit_bytes: 10,
+            },
+        ];
+        for err in variants {
+            assert!(!err.user_message().contains(SECRET), "{err:?}");
+        }
+        // The error produced for a buffer that embeds the secret carries
+        // only the byte counts, never the bytes themselves.
         let mut pdf = minimal_pdf();
-        pdf.extend_from_slice(b"TOP-SECRET-DOCUMENT-CONTENT-987654321");
-        let err = validate_bytes(truncated_header_only().as_slice(), &cfg()).unwrap_err();
-        assert!(!err.user_message().contains("987654321"));
-        let encrypted_err = ValidationError::Encrypted.user_message();
-        assert!(!encrypted_err.contains("987654321"));
+        pdf.extend_from_slice(SECRET.as_bytes());
+        let err = validate_bytes(
+            &pdf,
+            &ValidationConfig {
+                max_size_bytes: 10,
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, ValidationError::TooLarge { .. }),
+            "oversized fixture must classify as TooLarge"
+        );
+        assert!(!err.user_message().contains(SECRET));
+        assert!(!err.user_message().contains("%PDF-1.4"));
     }
 
     #[test]
