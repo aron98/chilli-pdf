@@ -32,6 +32,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Linux needs GTK 3 development files to build the native window
+      # shell (eframe/egui + rfd). macOS and Windows need nothing extra.
+      - name: Install Linux GUI system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
       - run: cargo build --release --locked
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
