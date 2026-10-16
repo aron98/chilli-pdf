@@ -619,7 +619,9 @@ dependencies = [
  "eframe",
  "hex",
  "include_dir",
+ "libloading 0.8.9",
  "pdfium-render",
+ "png",
  "rfd",
  "sha2",
 ]

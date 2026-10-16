@@ -21,6 +21,10 @@ default = ["gui"]
 gui = ["dep:eframe", "dep:rfd"]
 
 [dependencies]
+# Runtime dlopen of libtesseract: the OCR engine must load the native
+# library by absolute path from the extracted assets, so no build-time
+# linked tesseract crate is acceptable (see src/ocr/mod.rs).
+libloading = "0.8"
 dirs = "7"
 hex = "0.4"
 include_dir = "0.7"
@@ -33,10 +37,13 @@ rfd = { version = "0.17", optional = true }
 # production; a dev-downloaded binary under gitignored `scratch/` in dev).
 pdfium-render = "0.9"
 
+[dev-dependencies]
+# Decoding the committed PNG test fixture in integration tests.
+png = "0.18"
+# Exercising the PDF rendering backend in integration tests.
+pdfium-render = "0.9"
+
 [profile.release]
 lto = "thin"
 strip = "symbols"
 panic = "abort"
-
-[dev-dependencies]
-pdfium-render = "0.9"
