@@ -1,0 +1,11 @@
+# Bundled assets are embedded into the binary at compile time and verified
+# against the committed SHA-256 manifest (assets/manifest.txt). Any checkout-
+# time conversion — especially LF -> CRLF on Windows — changes the bytes and
+# breaks verification. Mark everything under assets/ as binary (-text), and
+# the native-library / traineddata extensions explicitly so real binaries
+# dropped in later are also immune even if they live outside assets/.
+assets/** -text
+*.so binary
+*.dylib binary
+*.dll binary
+*.traineddata binary

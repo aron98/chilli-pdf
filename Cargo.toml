@@ -10,6 +10,10 @@ repository = "https://github.com/aron98/chilli-pdf"
 keywords = ["pdf", "ocr", "tesseract", "pdfium", "searchable"]
 categories = ["gui", "text-processing"]
 
+# Dependencies land milestone by milestone (see the issue tracker and
+# docs/architecture.md). `assets` needs: per-user directories (dirs),
+# manifest hashing (sha2, hex), and embedding the asset bundle
+# (include_dir).
 [features]
 default = ["gui"]
 # Native window shell (eframe/egui + rfd dialogs). Off = headless build:
@@ -17,6 +21,10 @@ default = ["gui"]
 gui = ["dep:eframe", "dep:rfd"]
 
 [dependencies]
+dirs = "7"
+hex = "0.4"
+include_dir = "0.7"
+sha2 = "0.11"
 eframe = { version = "0.36", optional = true }
 rfd = { version = "0.17", optional = true }
 # PDF rendering/saving backend. The native PDFium library is never linked at
@@ -29,3 +37,6 @@ pdfium-render = "0.9"
 lto = "thin"
 strip = "symbols"
 panic = "abort"
+
+[dev-dependencies]
+pdfium-render = "0.9"
