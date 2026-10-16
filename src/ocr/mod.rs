@@ -232,7 +232,9 @@ mod tests {
             vec![PathBuf::from("/nonexistent/chilli-pdf-libtesseract.so")],
             &dir,
         );
-        let err = OcrEngine::new(LanguagePreset::Hungarian, &paths).unwrap_err();
+        let err = OcrEngine::new(LanguagePreset::Hungarian, &paths)
+            .err()
+            .expect("missing traineddata must fail initialisation");
         assert!(
             matches!(err, OcrError::MissingTraineddata { code: "hun", .. }),
             "{err:?}"
@@ -248,7 +250,9 @@ mod tests {
             vec![PathBuf::from("/nonexistent/chilli-pdf-libtesseract.so")],
             &dir,
         );
-        let err = OcrEngine::new(LanguagePreset::EnglishHungarian, &paths).unwrap_err();
+        let err = OcrEngine::new(LanguagePreset::EnglishHungarian, &paths)
+            .err()
+            .expect("missing library must fail initialisation");
         assert!(
             matches!(
                 err,

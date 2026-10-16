@@ -247,7 +247,10 @@ mod tests {
 
     #[test]
     fn static_paths_echo_what_was_given() {
-        let paths = StaticOcrPaths::new(vec!["/x/libtesseract.so".into()], "/t/tessdata".into());
+        let paths = StaticOcrPaths::new(
+            vec!["/x/libtesseract.so".into()],
+            PathBuf::from("/t/tessdata"),
+        );
         assert_eq!(
             paths.library_paths().unwrap(),
             vec![PathBuf::from("/x/libtesseract.so")]
@@ -257,7 +260,7 @@ mod tests {
 
     #[test]
     fn static_paths_with_no_libraries_errors() {
-        let paths = StaticOcrPaths::new(Vec::new(), "/t".into());
+        let paths = StaticOcrPaths::new(Vec::new(), PathBuf::from("/t"));
         assert!(paths.library_paths().is_err());
     }
 

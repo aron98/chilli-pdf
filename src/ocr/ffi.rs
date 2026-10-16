@@ -83,7 +83,7 @@ impl TesseractApi {
                 language: language.to_owned(),
             });
         }
-        let mut tesseract = Self { api, handle };
+        let tesseract = Self { api, handle };
         // Tesseract's datapath convention is a directory ending in `/`.
         let datapath = c_string(&format!("{}/", tessdata_dir.to_string_lossy()))?;
         let language_c = c_string(language)?;
@@ -301,14 +301,14 @@ fn load(library_paths: &[PathBuf]) -> Result<Api, OcrError> {
 }
 
 /// Resolve one C symbol, with a content-free error when it is missing.
-fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T, OcrError> {
+fn symbol<T: Copy>(library: &Library, name: &'static [u8]) -> Result<T, OcrError> {
     let symbol = unsafe { library.get::<T>(name) }.map_err(|_| OcrError::MissingSymbol {
         symbol: symbol_name(name),
     })?;
     Ok(*symbol)
 }
 
-fn symbol_name(name: &[u8]) -> &'static str {
+fn symbol_name(name: &'static [u8]) -> &'static str {
     let end = name
         .iter()
         .position(|&byte| byte == 0)
@@ -328,14 +328,16 @@ mod tests {
 
     #[test]
     fn empty_library_list_is_reported() {
-        let err = load(&[]).unwrap_err();
+        let err = load(&[]).err().expect("empty library list must fail");
         assert!(matches!(err, OcrError::LibraryNotFound { .. }), "{err:?}");
     }
 
     #[test]
     fn missing_library_file_is_reported() {
         let path = PathBuf::from("/nonexistent/chilli-pdf-libtesseract-test.so");
-        let err = load(std::slice::from_ref(&path)).unwrap_err();
+        let err = load(std::slice::from_ref(&path))
+            .err()
+            .expect("missing library file must fail");
         assert!(
             matches!(err, OcrError::LibraryLoad { ref path, .. } if path == &PathBuf::from("/nonexistent/chilli-pdf-libtesseract-test.so")),
             "{err:?}"
