@@ -27,8 +27,16 @@ include_dir = "0.7"
 sha2 = "0.11"
 eframe = { version = "0.36", optional = true }
 rfd = { version = "0.17", optional = true }
+# PDF rendering/saving backend. The native PDFium library is never linked at
+# build time: pdfium-render loads it DYNAMICALLY at runtime from an absolute
+# path resolved by `PdfiumLibrarySource` (the bundled-assets layer in
+# production; a dev-downloaded binary under gitignored `scratch/` in dev).
+pdfium-render = "0.9"
 
 [profile.release]
 lto = "thin"
 strip = "symbols"
 panic = "abort"
+
+[dev-dependencies]
+pdfium-render = "0.9"
