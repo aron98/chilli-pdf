@@ -59,6 +59,10 @@ struct Api {
         *mut c_int,
     ) -> c_int,
     is_at_beginning_of: unsafe extern "C" fn(IteratorHandle, c_int) -> c_int,
+    #[expect(
+        dead_code,
+        reason = "RAII guard: the handles are never read, only kept alive"
+    )]
     libraries: Vec<Library>,
 }
 
