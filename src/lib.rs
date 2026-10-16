@@ -12,6 +12,8 @@ pub mod assets;
 pub mod converter;
 pub mod language;
 pub mod output_path;
+pub mod transactional;
+pub mod validation;
 
 #[cfg(feature = "gui")]
 pub mod app;
