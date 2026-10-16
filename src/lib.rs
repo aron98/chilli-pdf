@@ -8,6 +8,7 @@
 //! and pass tests on Windows, macOS, and Linux.
 
 pub mod app_state;
+pub mod assets;
 pub mod converter;
 pub mod language;
 pub mod output_path;
