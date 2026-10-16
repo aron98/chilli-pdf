@@ -11,6 +11,7 @@ pub mod app_state;
 pub mod converter;
 pub mod language;
 pub mod output_path;
+pub mod skip_text;
 
 #[cfg(feature = "gui")]
 pub mod app;
