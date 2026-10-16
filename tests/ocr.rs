@@ -4,6 +4,8 @@
 //! When either is missing the tests print a skip notice and pass, so CI
 //! runners without the native dependency stay green.
 
+use std::io::Cursor;
+
 use chilli_pdf::language::LanguagePreset;
 use chilli_pdf::ocr::{
     OcrEngine, OcrImage, OcrPage, OcrPaths, OcrWord, PixelFormat, SystemOcrPaths,
@@ -15,7 +17,7 @@ const FIXTURE: &[u8] = include_bytes!("fixtures/hungarian_ou.png");
 
 /// Decode the fixture PNG into raw grayscale pixels + dimensions.
 fn decode_fixture() -> (Vec<u8>, u32, u32, PixelFormat) {
-    let decoder = png::Decoder::new(FIXTURE);
+    let decoder = png::Decoder::new(Cursor::new(FIXTURE));
     let mut reader = decoder.read_info().expect("fixture PNG is valid");
     let capacity = reader.output_buffer_size().expect("fixture fits in memory");
     let mut buffer = vec![0u8; capacity];
