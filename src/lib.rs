@@ -8,10 +8,15 @@
 //! and pass tests on Windows, macOS, and Linux.
 
 pub mod app_state;
+pub mod assets;
 pub mod converter;
 pub mod language;
 pub mod ocr;
 pub mod output_path;
+pub mod pdf;
+pub mod skip_text;
+pub mod transactional;
+pub mod validation;
 
 #[cfg(feature = "gui")]
 pub mod app;

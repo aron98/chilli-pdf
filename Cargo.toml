@@ -10,6 +10,10 @@ repository = "https://github.com/aron98/chilli-pdf"
 keywords = ["pdf", "ocr", "tesseract", "pdfium", "searchable"]
 categories = ["gui", "text-processing"]
 
+# Dependencies land milestone by milestone (see the issue tracker and
+# docs/architecture.md). `assets` needs: per-user directories (dirs),
+# manifest hashing (sha2, hex), and embedding the asset bundle
+# (include_dir).
 [features]
 default = ["gui"]
 # Native window shell (eframe/egui + rfd dialogs). Off = headless build:
@@ -21,12 +25,23 @@ gui = ["dep:eframe", "dep:rfd"]
 # library by absolute path from the extracted assets, so no build-time
 # linked tesseract crate is acceptable (see src/ocr/mod.rs).
 libloading = "0.8"
+dirs = "7"
+hex = "0.4"
+include_dir = "0.7"
+sha2 = "0.11"
 eframe = { version = "0.36", optional = true }
 rfd = { version = "0.17", optional = true }
+# PDF rendering/saving backend. The native PDFium library is never linked at
+# build time: pdfium-render loads it DYNAMICALLY at runtime from an absolute
+# path resolved by `PdfiumLibrarySource` (the bundled-assets layer in
+# production; a dev-downloaded binary under gitignored `scratch/` in dev).
+pdfium-render = "0.9"
 
 [dev-dependencies]
 # Decoding the committed PNG test fixture in integration tests.
 png = "0.18"
+# Exercising the PDF rendering backend in integration tests.
+pdfium-render = "0.9"
 
 [profile.release]
 lto = "thin"
