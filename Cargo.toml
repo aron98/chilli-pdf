@@ -10,10 +10,23 @@ repository = "https://github.com/aron98/chilli-pdf"
 keywords = ["pdf", "ocr", "tesseract", "pdfium", "searchable"]
 categories = ["gui", "text-processing"]
 
-# Intentionally dependency-free while the project is a scaffold. The
-# conversion pipeline (eframe GUI, PDFium binding, Tesseract OCR) is added
-# milestone by milestone — see the issue tracker and docs/architecture.md.
+# Dependencies land milestone by milestone (see the issue tracker and
+# docs/architecture.md). `assets` needs: per-user directories (dirs),
+# manifest hashing (sha2, hex), and embedding the asset bundle
+# (include_dir).
+[features]
+default = ["gui"]
+# Native window shell (eframe/egui + rfd dialogs). Off = headless build:
+# the core logic compiles and tests without a display or GUI toolkit.
+gui = ["dep:eframe", "dep:rfd"]
+
 [dependencies]
+dirs = "7"
+hex = "0.4"
+include_dir = "0.7"
+sha2 = "0.11"
+eframe = { version = "0.36", optional = true }
+rfd = { version = "0.17", optional = true }
 
 [profile.release]
 lto = "thin"

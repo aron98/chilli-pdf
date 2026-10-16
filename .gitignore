@@ -2,9 +2,13 @@
 /target
 **/*.rs.bk
 
-# Bundled runtime payloads (built by `xtask`), not source-controlled
-/assets
+# Bundled runtime payloads, not source-controlled (release packaging)
 /dist
+
+# NOTE: /assets IS source-controlled (issue #9). assets/v1 holds the
+# embedded asset bundle (fixture libs + traineddata now, real binaries
+# dropped in later — data-only) and assets/manifest.txt is the generated
+# SHA-256 manifest both the build and the tests depend on.
 
 # Local experiments and scratch output
 /scratch
