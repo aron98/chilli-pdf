@@ -32,3 +32,6 @@ rfd = { version = "0.17", optional = true }
 lto = "thin"
 strip = "symbols"
 panic = "abort"
+
+[dev-dependencies]
+pdfium-render = "0.9"

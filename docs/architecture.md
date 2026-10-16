@@ -13,13 +13,13 @@ is frozen until the v0.1.0 milestone closes.
 | File dialogs | `rfd` | native pickers on all three OSes |
 | PDF render/parse | **PDFium** via `pdfium-render` | battle-tested renderer; loads a bundled `pdfium.dll`/`libpdfium.dylib`/`libpdfium.so` |
 | OCR | **Tesseract 5** via bundled native lib + `leptonica` | eng + hun traineddata bundled |
-| Text overlay | hOCR/TSV → invisible text layer stamped onto original pages | spike proves feasibility & fidelity |
+| Text overlay | Tesseract word boxes (TSV/API) → invisible text layer (Tr 3, glyphless Type0 font, per-word rotated Tm + width-matching Tz) written in-process, merged by appending overlay ops to the original content stream | spike #6: strategy C chosen over hOCR parsing and TessPDFRenderer; original page image untouched — see docs/spike-report.md |
 
 Alternatives considered: pure-Rust OCR (e.g. PaddleOCR-derived pipelines) —
 fast-moving but noticeably weaker on Hungarian than Tesseract's mature
-traineddata; `pdf`/`lopdf` writing of the overlay is an option but PDFium
-import/stamping keeps a single rendering/positioning truth. Spike issues
-validate before locking in.
+traineddata; `pdf`/`lopdf` writing of the overlay + content-stream append
+(spike-verified) or PDFium import/stamping are both viable merge mechanisms;
+the spike report records the trade-offs.
 
 ## Process layout
 
