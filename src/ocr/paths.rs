@@ -6,6 +6,7 @@
 //! never depends on a particular delivery mechanism.
 
 use std::env;
+#[cfg(target_os = "linux")]
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -229,6 +230,11 @@ fn tessdata_candidates() -> Vec<PathBuf> {
 }
 
 /// Immediate subdirectories of `dir`, ignoring entries that cannot be read.
+///
+/// Only the Linux candidate lists enumerate subdirectories; gating the helper
+/// keeps it from becoming dead code (and `-D warnings` failures) on the
+/// platforms with fixed candidate paths.
+#[cfg(target_os = "linux")]
 fn read_subdirs(dir: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(entries) = fs::read_dir(dir) {
