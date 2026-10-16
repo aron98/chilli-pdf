@@ -205,7 +205,10 @@ mod tests {
             min_words: 1,
             min_non_whitespace_chars: 1,
         };
-        assert_eq!(classify_page("x", &loose), PageTextVerdict::AlreadySearchable);
+        assert_eq!(
+            classify_page("x", &loose),
+            PageTextVerdict::AlreadySearchable
+        );
 
         let strict = SkipThresholds {
             min_words: 8,
