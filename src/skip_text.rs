@@ -186,11 +186,8 @@ mod tests {
 
     #[test]
     fn mixed_document_pages_are_classified_independently() {
-        let pages = [
-            "Chapter 1 — Introduction".repeat(20).as_str(),
-            "\u{0}",
-            "DRAFT 2026",
-        ];
+        let long_page = "Chapter 1 — Introduction".repeat(20);
+        let pages = [long_page.as_str(), "\u{0}", "DRAFT 2026"];
         let verdicts: Vec<_> = pages
             .iter()
             .map(|p| classify_page(p, &SkipThresholds::default()))
