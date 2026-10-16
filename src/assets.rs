@@ -32,7 +32,7 @@
 
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -546,11 +546,14 @@ fn write_bundle(dir: &Path) -> Result<(), AssetError> {
             fs::create_dir_all(parent)
                 .map_err(|e| AssetError::io("create asset parent dir", parent, e))?;
         }
-        fs::write(&path, file.contents()).map_err(|e| AssetError::io("write asset", &path, e))?;
-        let handle =
-            fs::File::open(&path).map_err(|e| AssetError::io("open written asset", &path, e))?;
-        handle
-            .sync_all()
+        // Write and fsync through the SAME write-capable handle. On Windows,
+        // FlushFileBuffers requires write access to the file, so syncing a
+        // second, read-only handle fails with Access is denied (error 5).
+        let mut out =
+            fs::File::create(&path).map_err(|e| AssetError::io("write asset", &path, e))?;
+        out.write_all(file.contents())
+            .map_err(|e| AssetError::io("write asset", &path, e))?;
+        out.sync_all()
             .map_err(|e| AssetError::io("sync asset", &path, e))?;
     }
     Ok(())
