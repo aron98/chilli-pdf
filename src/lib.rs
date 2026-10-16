@@ -12,6 +12,7 @@ pub mod assets;
 pub mod converter;
 pub mod language;
 pub mod output_path;
+pub mod pdf;
 pub mod transactional;
 pub mod validation;
 
