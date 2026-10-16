@@ -47,7 +47,12 @@ pub enum WorkerEvent {
 pub struct CancelHandle(Arc<AtomicBool>);
 
 impl CancelHandle {
-    fn fresh() -> Self {
+    /// A fresh, uncancelled handle.
+    ///
+    /// Crate-internal: only in-crate [`Converter`] implementations (the
+    /// [`MockConverter`] and the real pipeline in `crate::worker`) mint
+    /// handles for the [`Worker`] they return.
+    pub(crate) fn fresh() -> Self {
         Self(Arc::new(AtomicBool::new(false)))
     }
 
@@ -70,6 +75,14 @@ pub struct Worker {
 }
 
 impl Worker {
+    /// Assemble a worker from its parts.
+    ///
+    /// Crate-internal: in-crate [`Converter`] implementations return a
+    /// [`Worker`] from [`Converter::start`].
+    pub(crate) fn new(cancel: CancelHandle, handle: Option<JoinHandle<()>>) -> Self {
+        Self { cancel, handle }
+    }
+
     /// Ask the job to stop; the worker acknowledges with
     /// [`WorkerEvent::Cancelled`].
     pub fn cancel(&self) {
