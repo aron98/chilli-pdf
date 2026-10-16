@@ -1,5 +1,21 @@
 # OCR test fixtures
 
+## `pdf.ttf` — glyphless overlay font
+
+The 572-byte glyphless TrueType font Tesseract ships (in the `tesseract-ocr`
+package) for its searchable-PDF output, used by `tests/overlay.rs` as the
+default font-bytes resolver for the invisible-text writer (issue #13).
+
+Provenance: copied verbatim from `/usr/share/tesseract-ocr/5/tessdata/pdf.ttf`
+(tesseract-ocr 5.x on Debian/Ubuntu). It contains a single `.null` glyph with a
+non-zero advance width and no outlines at all, which is exactly what an
+invisible (`Tr 3`) text layer needs: every text code maps to the one glyph, so
+`Tz` scaling controls the advance and nothing is ever drawn.
+
+License: Apache License 2.0 — same as Tesseract itself (see
+`THIRD_PARTY_NOTICES.md`). In production the font is bundled as an application
+asset (src/assets.rs, issue #9), never read from this fixture.
+
 ## `hungarian_ou.png`
 
 A 300 DPI, 8-bit grayscale render of two Hungarian lines containing both
