@@ -10,6 +10,7 @@
 pub mod app_state;
 pub mod converter;
 pub mod language;
+pub mod ocr;
 pub mod output_path;
 
 #[cfg(feature = "gui")]

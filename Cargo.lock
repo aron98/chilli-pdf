@@ -601,6 +601,8 @@ name = "chilli-pdf"
 version = "0.1.0"
 dependencies = [
  "eframe",
+ "libloading",
+ "png",
  "rfd",
 ]
 

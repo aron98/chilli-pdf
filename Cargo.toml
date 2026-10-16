@@ -17,8 +17,16 @@ default = ["gui"]
 gui = ["dep:eframe", "dep:rfd"]
 
 [dependencies]
+# Runtime dlopen of libtesseract: the OCR engine must load the native
+# library by absolute path from the extracted assets, so no build-time
+# linked tesseract crate is acceptable (see src/ocr/mod.rs).
+libloading = "0.8"
 eframe = { version = "0.36", optional = true }
 rfd = { version = "0.17", optional = true }
+
+[dev-dependencies]
+# Decoding the committed PNG test fixture in integration tests.
+png = "0.18"
 
 [profile.release]
 lto = "thin"
