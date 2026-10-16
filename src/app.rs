@@ -13,8 +13,9 @@ use std::time::Duration;
 use eframe::egui::{self as egui, Color32, RichText};
 
 use crate::app_state::{AppState, Phase, Status};
-use crate::converter::{Converter, MockConverter};
+use crate::converter::Converter;
 use crate::language::LanguagePreset;
+use crate::worker::PipelineConverter;
 
 /// How often the window wakes up while a conversion is running, so the
 /// progress bar animates even between worker messages.
@@ -22,10 +23,14 @@ const PROGRESS_REPAINT: Duration = Duration::from_millis(100);
 
 /// The conversion backend shipped with the GUI.
 ///
-/// The real OCR pipeline lands in the conversion milestone; until then the
-/// window runs against the mock so the whole shell is testable end to end.
+/// The real conversion worker (issue #10): validation, PDFium rendering,
+/// Tesseract OCR and the transactional publish all run on the pipeline's
+/// dedicated thread. The invisible-text overlay itself is pending its
+/// milestone (issue #13), so finished runs report the typed "overlay
+/// pending" failure until that lands and the seam is wired. The state
+/// machine's tests keep using the mock converter.
 pub fn default_converter() -> Arc<dyn Converter> {
-    Arc::new(MockConverter::default())
+    Arc::new(PipelineConverter::production())
 }
 
 /// Open the native window. `initial_input` pre-selects an input PDF when

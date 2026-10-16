@@ -195,6 +195,14 @@ impl PdfDocument<'_> for PdfiumDocument<'_> {
         })
     }
 
+    fn page_text(&self, page: usize) -> Result<String, PdfError> {
+        let pdf_page = self.page(page)?;
+        let text = pdf_page
+            .text()
+            .map_err(|_| PdfError::TextExtractionFailed { page })?;
+        Ok(text.all())
+    }
+
     fn save_as(&self, destination: &Path) -> Result<(), PdfError> {
         self.document
             .save_to_file(destination)

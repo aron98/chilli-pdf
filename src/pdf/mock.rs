@@ -13,17 +13,21 @@ use super::{
     capped_render_scale, pdfium_axis_pixels,
 };
 
-/// The geometry of one fake page.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// The geometry and scripted content of one fake page.
+#[derive(Debug, Clone, PartialEq)]
 pub struct MockPageSpec {
     /// Crop box in points.
     pub crop_box: PageBox,
     /// `/Rotate` value.
     pub rotation: PageRotation,
+    /// Text returned by [`PdfDocument::page_text`] for this page, so
+    /// tests can script already-searchable pages for the skip-text
+    /// heuristic. Empty by default (a page that needs OCR).
+    pub text: String,
 }
 
 impl MockPageSpec {
-    /// A default US Letter page, unrotated.
+    /// A default US Letter page, unrotated, with no embedded text.
     #[must_use]
     pub fn letter() -> Self {
         Self {
@@ -34,6 +38,17 @@ impl MockPageSpec {
                 top: 792.0,
             },
             rotation: PageRotation::None,
+            text: String::new(),
+        }
+    }
+
+    /// The same page carrying a text layer that classifies as already
+    /// searchable (see [`PdfDocument::page_text`], `crate::skip_text`).
+    #[must_use]
+    pub fn searchable() -> Self {
+        Self {
+            text: "The quick brown fox jumps over the lazy dog.".to_owned(),
+            ..Self::letter()
         }
     }
 }
@@ -84,6 +99,14 @@ impl PdfDocument<'_> for MockDocument {
         })
     }
 
+    fn page_text(&self, page: usize) -> Result<String, PdfError> {
+        let spec = self.pages.get(page).ok_or(PdfError::PageOutOfBounds {
+            page,
+            page_count: self.pages.len(),
+        })?;
+        Ok(spec.text.clone())
+    }
+
     fn save_as(&self, destination: &Path) -> Result<(), PdfError> {
         self.saves
             .lock()
@@ -112,6 +135,18 @@ impl MockEngine {
     pub fn with_pages(count: usize) -> Self {
         Self {
             pages: vec![MockPageSpec::letter(); count],
+            ..Self::default()
+        }
+    }
+
+    /// An engine whose documents have exactly these pages, in order.
+    ///
+    /// Lets tests script per-page text (mixed scanned/digital documents)
+    /// and geometry without any filesystem or native library.
+    #[must_use]
+    pub fn with_spec(pages: Vec<MockPageSpec>) -> Self {
+        Self {
+            pages,
             ..Self::default()
         }
     }
@@ -213,6 +248,25 @@ mod tests {
     }
 
     #[test]
+    fn page_text_is_scripted_per_page() {
+        let engine =
+            MockEngine::with_spec(vec![MockPageSpec::searchable(), MockPageSpec::letter()]);
+        let doc = engine.open_document(Path::new("mixed.pdf")).unwrap();
+        assert_eq!(
+            doc.page_text(0).unwrap(),
+            "The quick brown fox jumps over the lazy dog."
+        );
+        assert_eq!(doc.page_text(1).unwrap(), "");
+        assert_eq!(
+            doc.page_text(2).unwrap_err(),
+            PdfError::PageOutOfBounds {
+                page: 2,
+                page_count: 2
+            }
+        );
+    }
+
+    #[test]
     fn open_error_is_surfaced_verbatim() {
         let error = PdfError::PasswordProtected {
             path: PathBuf::from("secret.pdf"),
@@ -253,6 +307,7 @@ mod tests {
                     top: 30000.0,
                 },
                 rotation: PageRotation::None,
+                text: String::new(),
             }],
             ..MockEngine::default()
         };

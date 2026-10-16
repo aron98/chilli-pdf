@@ -17,6 +17,7 @@ pub mod pdf;
 pub mod skip_text;
 pub mod transactional;
 pub mod validation;
+pub mod worker;
 
 #[cfg(feature = "gui")]
 pub mod app;
