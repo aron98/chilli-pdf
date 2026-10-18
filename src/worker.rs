@@ -454,10 +454,13 @@ impl PipelineConverter {
             Arc::new(production_pdf_engine),
             Arc::new(production_ocr_engine),
             Arc::new(LopdfOverlay),
-            // TODO(#9/#19): move the glyphless font into the bundled asset
-            // manifest and take its bytes from the extracted assets
-            // instead of embedding the fixture copy.
-            include_bytes!("../tests/fixtures/pdf.ttf").to_vec(),
+            // Issue #19 hook: the glyphless font now ships in the
+            // verified asset bundle (`assets::glyphless_font_bytes`).
+            // The fixture copy stays as an infallible fallback so
+            // construction keeps its cannot-fail contract even against
+            // a bundle that predates the font entry.
+            crate::assets::glyphless_font_bytes()
+                .unwrap_or_else(|_| include_bytes!("../tests/fixtures/pdf.ttf").to_vec()),
         )
     }
 }
@@ -748,14 +751,25 @@ struct AssetOcrPaths {
 
 impl OcrPaths for AssetOcrPaths {
     fn library_paths(&self) -> Result<Vec<PathBuf>, OcrError> {
-        let path = self
+        // Issue #19 hook: Leptonica is bundled like the other native
+        // libraries, so it is handed to the loader explicitly —
+        // dependencies first, libtesseract itself last, exactly as the
+        // `OcrPaths` contract requires.
+        let leptonica = self
+            .assets
+            .library_path(NativeLib::Leptonica)
+            .map_err(|err| OcrError::LibraryLoad {
+                path: self.assets.dir().to_path_buf(),
+                message: err.to_string(),
+            })?;
+        let tesseract = self
             .assets
             .library_path(NativeLib::Tesseract)
             .map_err(|err| OcrError::LibraryLoad {
                 path: self.assets.dir().to_path_buf(),
                 message: err.to_string(),
             })?;
-        Ok(vec![path])
+        Ok(vec![leptonica, tesseract])
     }
 
     fn tessdata_dir(&self) -> Result<PathBuf, OcrError> {

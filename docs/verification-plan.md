@@ -75,10 +75,59 @@ machine and is **not** claimed as done.
 | egui window + GTK file dialogs on **X11** and on **Wayland** | Linux desktop, both sessions | run in each session; dialog opens, scale factor sane |
 | Full convert cycle end-to-end on each OS | all three | see acceptance checks 1–6 above |
 
+## Issue #19: Release packaging
+
+Everything below marked ✅ was actually executed on the dev machine
+(headless Linux, network available at build time). The Tesseract and
+Leptonica native libraries are still clearly-marked fixture placeholders
+(see `docs/packaging.md`); everything else in the fetched set is real.
+
+### ✅ Proven locally
+
+- `scripts/fetch-assets` run for **all three platforms** (linux64,
+  macos, windows64): each pinned PDFium archive downloaded and verified
+  twice — archive SHA-256 first, then the extracted inner file — before
+  placement: `libpdfium.so` (7,964,952 B), `libpdfium.dylib`
+  (7,360,768 B), `pdfium.dll` (7,512,064 B), plus `tessdata_fast`
+  eng/hun verified and placed and the glyphless font copied into the
+  bundle.
+- **Tamper test (fail-closed)**: flipping a single hex digit of a pinned
+  digest makes the fetch abort with a SHA-256 mismatch error and a
+  nonzero exit, placing nothing usable.
+- Full gate **in both bundle modes**: `cargo fmt --check` +
+  `cargo clippy --all-targets -- -D warnings` + `cargo test`
+  (178 unit + 3 ocr + 14 overlay + 1 pdf_render + 6 preservation +
+  2 doctests = 204 passed) is green with the committed fixture bundle
+  (the default, no network) and again with the fetched linux64
+  real-asset overlay embedded.
+- **The mode flip is build-verified**: `build.rs` watches `assets/` via
+  `cargo:rerun-if-changed`, so creating or removing the gitignored
+  `assets/real/` overlay re-runs the build script and re-embeds the
+  other bundle; mode-specific tests
+  (`real_bundle_is_current_platform_only` /
+  `fixture_bundle_carries_all_three_platforms_sets`) assert which
+  bundle is actually embedded.
+- Manifest regeneration stays one command in both layouts, and the
+  committed `assets/manifest.txt` round-trips byte-identical
+  (`cargo run --example update_asset_manifest` reports it up to date).
+
+### ⏳ Pending release runs (CI / real machines)
+
+| What | Where | How |
+|---|---|---|
+| Per-OS release job: fetch → build `--locked` → `--version` smoke-check → portable archive | GitHub Actions runners | push a `v*` tag and watch the release workflow |
+| Global `SHA256SUMS` over all per-OS archives attached to the release | GitHub Actions runners | download artifacts, re-check digests |
+| Release archive unpacks and runs with no dev tools, no OCR libs, no network | clean Windows/macOS/Linux machines | acceptance checks 1–6 above (issue #21) |
+
 ## Standing per-release checks
 
 - [ ] `cargo test`, `cargo fmt --check`, `cargo clippy -- -D warnings` green on all three CI platforms
-- [ ] Release artifacts built by CI with SHA-256 checksums published
+- [ ] Release artifacts built by CI from the pinned real-asset overlay
+      (`scripts/fetch-assets`), with a single global `SHA256SUMS`
+      published alongside them
+- [ ] Fetched real assets verified against pinned SHA-256 digests
+      (archive and inner file) before embedding; the fetch fails closed
+      on any mismatch
 - [ ] Bundled asset manifest verified against embedded checksums at extraction
 - [ ] No document contents in any error message or log
       (repeatable method and current results: `docs/privacy-audit.md`)

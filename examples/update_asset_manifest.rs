@@ -8,6 +8,14 @@
 //! cargo run --example update_asset_manifest
 //! ```
 //!
+//! With `--dir`/`--out` the same generator regenerates the manifest of any
+//! other bundle directory — `scripts/fetch-assets` uses this for the
+//! fetched real-asset bundle:
+//!
+//! ```text
+//! cargo run --example update_asset_manifest -- --dir assets/real/v1 --out assets/real/manifest.txt
+//! ```
+//!
 //! Swapping bundled assets is data-only: replace the files, rerun this
 //! example, and bump `ASSET_VERSION` in `src/assets.rs`. The in-crate test
 //! `embedded_bundle_matches_manifest` fails when the manifest is stale.
@@ -24,12 +32,10 @@ const HEADER: [&str; 3] = [
 ];
 
 fn main() {
-    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let bundle = crate_root.join("assets").join("v1");
-    let manifest_path = crate_root.join("assets").join("manifest.txt");
+    let (bundle, manifest_path) = parse_args();
 
     let mut names: Vec<String> = Vec::new();
-    collect_files(&bundle, &bundle, &mut names).expect("walk assets/v1");
+    collect_files(&bundle, &bundle, &mut names).expect("walk the asset bundle");
     names.sort();
     if names.is_empty() {
         panic!("no assets found under {}", bundle.display());
@@ -47,11 +53,70 @@ fn main() {
     }
 
     if fs::read_to_string(&manifest_path).unwrap_or_default() == text {
-        println!("assets/manifest.txt is up to date ({} files)", names.len());
+        println!(
+            "{} is up to date ({} files)",
+            manifest_path.display(),
+            names.len()
+        );
         return;
     }
-    fs::write(&manifest_path, &text).expect("write assets/manifest.txt");
-    println!("rewrote assets/manifest.txt for {} files", names.len());
+    fs::write(&manifest_path, &text).expect("write the asset manifest");
+    println!(
+        "rewrote {} for {} files",
+        manifest_path.display(),
+        names.len()
+    );
+}
+
+/// Resolve `--dir <bundle>` / `--out <manifest>` (both optional, both must
+/// be given together), defaulting to the committed fixture bundle.
+///
+/// Issue #19: the fetch pipeline needs the same generator for the
+/// per-platform real-asset bundle under `assets/real/`, so the paths are
+/// arguments instead of a second copy of the generator.
+fn parse_args() -> (PathBuf, PathBuf) {
+    let mut args = std::env::args_os().skip(1);
+    let mut dir: Option<PathBuf> = None;
+    let mut out: Option<PathBuf> = None;
+    while let Some(arg) = args.next() {
+        match arg.to_string_lossy().as_ref() {
+            "--dir" => {
+                dir = Some(PathBuf::from(arg_value(&mut args, "--dir")));
+            }
+            "--out" => {
+                out = Some(PathBuf::from(arg_value(&mut args, "--out")));
+            }
+            other => {
+                panic!(
+                    "unknown argument `{other}` (expected `--dir <bundle>` / `--out <manifest>`)"
+                );
+            }
+        }
+    }
+    match (dir, out) {
+        (None, None) => {
+            let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+            (
+                crate_root.join("assets").join("v1"),
+                crate_root.join("assets").join("manifest.txt"),
+            )
+        }
+        (Some(dir), Some(out)) => (dir, out),
+        (dir, out) => {
+            panic!(
+                "`--dir` and `--out` must be given together (got --dir: {dir:?}, --out: {out:?})"
+            );
+        }
+    }
+}
+
+/// The value following a flag, or a usage panic when it is missing.
+fn arg_value(
+    args: &mut impl Iterator<Item = std::ffi::OsString>,
+    flag: &str,
+) -> std::ffi::OsString {
+    args.next()
+        .unwrap_or_else(|| panic!("`{flag}` requires a value"))
 }
 
 /// Recursively collect file paths relative to `root`.

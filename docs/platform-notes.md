@@ -133,9 +133,12 @@ The v1 binary is **unsigned and un-notarized**:
 
 ## Native library loading
 
-- PDFium and Tesseract are loaded **only by absolute, canonicalized
-  paths** inside the verified per-user asset directory
-  (`ExtractedAssets::library_path`); `src/pdf/render.rs` rejects
+- PDFium, Tesseract, and Leptonica are loaded **only by absolute,
+  canonicalized paths** inside the verified per-user asset directory
+  (`ExtractedAssets::library_path`); Leptonica is loaded before
+  Tesseract (dependencies first, per the `OcrPaths` contract in
+  `src/ocr/paths.rs` — issue #19 bundled Leptonica like the other
+  libraries); `src/pdf/render.rs` rejects
   non-absolute paths before binding, and no `PATH`/`CDLL` search is
   used on any platform.
 - Known gap (out of scope for issue #17, tracked as a follow-up):

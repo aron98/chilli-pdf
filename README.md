@@ -58,8 +58,17 @@ cargo fmt --check && cargo clippy -- -D warnings
 
 CI builds and tests every commit on `ubuntu-latest`, `macos-latest`, and
 `windows-latest`; releases are produced by the `Release` workflow on `v*`
-tags. Release packaging (bundling PDFium/Tesseract and OCR models) is
-milestone work — see the tracker.
+tags. Release binaries embed the pinned, checksum-verified real asset
+set — see `docs/packaging.md`. To build with the real assets yourself:
+
+```sh
+scripts/fetch-assets          # downloads + verifies pinned PDFium/OCR models
+cargo build --release         # embeds assets/real/ instead of the fixtures
+```
+
+Development without a network keeps working: without the fetch step the
+build embeds the committed fixture bundle instead (see
+`docs/packaging.md`).
 
 ## CLI
 

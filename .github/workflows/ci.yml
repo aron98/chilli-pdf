@@ -23,6 +23,13 @@ jobs:
       # minimal profile, so add the fmt component explicitly.
       - run: rustup toolchain install && rustup component add rustfmt
       - run: cargo fmt --check
+      # Issue #19: the pinned, checksum-verifying asset fetch step runs
+      # in the Release workflow; keep its argument handling and quoting
+      # under a shellcheck gate here.
+      - name: Lint the packaging script (shellcheck)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+          shellcheck scripts/fetch-assets
 
   build:
     name: build (${{ matrix.os }})
