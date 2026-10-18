@@ -68,6 +68,11 @@ pub enum PdfError {
         /// The page index, zero-based (as used in the API).
         page: usize,
     },
+    /// PDFium refused to extract the page's existing text layer.
+    TextExtractionFailed {
+        /// The page index, zero-based (as used in the API).
+        page: usize,
+    },
     /// Writing the document to the destination path failed.
     SaveFailed {
         /// The path that was attempted.
@@ -132,6 +137,13 @@ impl fmt::Display for PdfError {
             }
             Self::RenderFailed { page } => {
                 write!(f, "page {} could not be rendered", page + 1)
+            }
+            Self::TextExtractionFailed { page } => {
+                write!(
+                    f,
+                    "the existing text of page {} could not be extracted",
+                    page + 1,
+                )
             }
             Self::SaveFailed { path } => {
                 write!(f, "the PDF could not be saved to {}", path.display())
