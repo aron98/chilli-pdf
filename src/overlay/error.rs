@@ -30,6 +30,13 @@ pub enum OverlayError {
         /// The number of pages actually in the document.
         in_document: usize,
     },
+    /// A sparse overlay entry named a page that the document does not have.
+    PageIndexOutOfRange {
+        /// The offending page index, zero-based (as supplied by the caller).
+        page: usize,
+        /// The number of pages actually in the document.
+        in_document: usize,
+    },
     /// A page's geometry (crop box) is degenerate or non-finite, so no
     /// display-space position can be derived from it.
     InvalidPageGeometry {
@@ -86,6 +93,15 @@ impl fmt::Display for OverlayError {
                     if *in_document == 1 { "" } else { "s" },
                     provided,
                     if *provided == 1 { "" } else { "s" },
+                )
+            }
+            Self::PageIndexOutOfRange { page, in_document } => {
+                write!(
+                    f,
+                    "the overlay results reference page {} but the document only has {} page{}",
+                    page + 1,
+                    in_document,
+                    if *in_document == 1 { "" } else { "s" },
                 )
             }
             Self::InvalidPageGeometry { page } => {

@@ -203,14 +203,23 @@ impl PageOverlay for LopdfOverlay {
         font: &[u8],
         sink: &mut dyn Write,
     ) -> Result<(), OverlayError> {
-        let overlay_pages: Vec<crate::overlay::OverlayPage> = pages
+        // The pipeline collects results only for pages that needed OCR
+        // (already-searchable pages are skipped), so hand them over with
+        // their zero-based page indices and let the overlay writer merge
+        // by index; pages without an entry are left untouched (issue #18).
+        let indexed: Vec<(usize, crate::overlay::OverlayPage)> = pages
             .iter()
-            .map(|result| crate::overlay::OverlayPage {
-                ocr: result.ocr.clone(),
-                metadata: result.metadata,
+            .map(|result| {
+                (
+                    result.page,
+                    crate::overlay::OverlayPage {
+                        ocr: result.ocr.clone(),
+                        metadata: result.metadata,
+                    },
+                )
             })
             .collect();
-        crate::overlay::write_overlay_to(input, &overlay_pages, font, sink).map_err(|err| {
+        crate::overlay::write_overlay_indexed_to(input, &indexed, font, sink).map_err(|err| {
             OverlayError::Failed {
                 message: err.to_string(),
             }
