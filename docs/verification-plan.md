@@ -8,23 +8,26 @@ being actually executed**, and limitations are stated explicitly.
 
 The repository contains a buildable, unit-tested project: the headless
 conversion pipeline and the eframe/egui shell are implemented, and
-`cargo test` is green on the (headless Linux) dev machine. **None of the
-acceptance checks below have been run on a real desktop OS yet.**
-Windows execution is not available in the current development
-environment; any Windows-specific verification will be performed on a
-clean Windows 10/11 VM and reported here, never assumed. macOS likewise
-needs a real Mac.
+`cargo test` is green on the (headless Linux) dev machine. The checks
+below that can run in this development environment were executed with
+real engines on 2026-10-18; the dated evidence lives in
+**`docs/verification-report.md`**. Checks that need a real desktop OS, a
+release binary, or human eyes in a real PDF viewer remain ⏳ and are
+never assumed. Windows execution is not available in the current
+development environment; any Windows-specific verification will be
+performed on a clean Windows 10/11 VM and reported here, never assumed.
+macOS likewise needs a real Mac.
 
 ## Acceptance checks (from product requirements)
 
 | # | Check | Status |
 |---|-------|--------|
-| 1 | Run final executable on a clean Windows machine/VM, no dev tools, no separate dependencies, networking disabled from first launch | ⏳ pending |
-| 2 | Convert an English scan, a Hungarian scan, and a mixed-language document | ⏳ pending |
-| 3 | Verify actual text extraction and representative search/copy results incl. Hungarian accents (`ő`, `ű`) in Edge **and** at least one other PDF viewer | ⏳ pending |
-| 4 | Check alignment, appearance, page count, page dimensions, and rotation against the input | ⏳ pending |
-| 5 | Test mixed searchable/scanned pages, cancellation, malformed input, password-protected input, Unicode paths, output collisions, and a larger multipage document | ⏳ pending |
-| 6 | Confirm runtime processing makes no network requests | ⏳ pending |
+| 1 | Run final executable on a clean Windows machine/VM, no dev tools, no separate dependencies, networking disabled from first launch | ⏳ pending — see `docs/verification-report.md` |
+| 2 | Convert an English scan, a Hungarian scan, and a mixed-language document | ✅ verified locally 2026-10-18 (real engines) / ⏳ on Windows + release bundle — see `docs/verification-report.md` |
+| 3 | Verify actual text extraction and representative search/copy results incl. Hungarian accents (`ő`, `ű`) in Edge **and** at least one other PDF viewer | ✅ extraction verified locally 2026-10-18 (pdftotext + pypdf) / ⏳ viewer search/copy — see `docs/verification-report.md` |
+| 4 | Check alignment, appearance, page count, page dimensions, and rotation against the input | ✅ verified locally 2026-10-18 (structural + bbox + 150 DPI raster + qpdf) / ⏳ on release binary — see `docs/verification-report.md` |
+| 5 | Test mixed searchable/scanned pages, cancellation, malformed input, password-protected input, Unicode paths, output collisions, and a larger multipage document | ✅ verified locally 2026-10-18 (all sub-items; multipage at 5 pages) / ⏳ larger documents + real-machine repetition — see `docs/verification-report.md` |
+| 6 | Confirm runtime processing makes no network requests | ✅ static audit (CI deny gate + `docs/privacy-audit.md`) + ✅ local dynamic observation 2026-10-18 (strace) / ⏳ strongest form (external firewall/VM, release binary) — see `docs/verification-report.md` |
 
 Check 6 (runtime network): the enforceable, already-active parts are the
 CI dependency gate (`deny` job running `cargo deny check bans licenses`,
@@ -131,11 +134,17 @@ Leptonica native libraries are still clearly-marked fixture placeholders
 - [ ] Bundled asset manifest verified against embedded checksums at extraction
 - [ ] No document contents in any error message or log
       (repeatable method and current results: `docs/privacy-audit.md`)
-- [ ] Temporary files removed after success, cancellation, and failure
+- [x] Temporary files removed after success, cancellation, and failure —
+      verified locally 2026-10-18 by the acceptance driver (no
+      `.chilli-pdf-tmp` residue after any path), see
+      `docs/verification-report.md`
 - [x] Input file byte-identical before and after a conversion (checksum) —
   asserted by every test in `tests/preservation.rs` via its `merged()` helper
   (and by `tests/overlay.rs::merged_output_preserves_the_original_appearance`)
-- [ ] Output file absent after a cancelled or failed conversion
+- [x] Output file absent after a cancelled or failed conversion —
+      verified locally 2026-10-18 by the acceptance driver (cancel,
+      encrypted, signed, malformed, output==input paths), see
+      `docs/verification-report.md`
 - [ ] `THIRD_PARTY_NOTICES.md` complete and shipped with the binary
 
 ## Preservation checks verified by automated tests (issue #14)
