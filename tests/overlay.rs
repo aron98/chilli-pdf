@@ -5,15 +5,19 @@
 //! font and `PIL.ImageDraw.textbbox`, at each fixture's own 144 DPI (2 px
 //! per point) in DISPLAY pixel space — the space `OcrPage` boxes live in.
 //!
-//! External-tool assertions (`pdftotext` from poppler-utils) are dev-only
-//! and skip, not fail, when the tool is absent so CI stays green.
+//! Every assertion is in-process: the merged output is parsed back with
+//! lopdf and the overlay words (UTF-16BE hex strings) plus their `Tm`
+//! positioning are compared against golden user-space coordinates, so a
+//! plain `cargo test` is self-contained and deterministic on every OS.
+//! (The original `pdftotext` assertions broke on the Windows CI runner:
+//! poppler there exits non-zero for `-bbox` and hands out mojibake for
+//! non-ASCII text — see issue #13.)
 
 use chilli_pdf::ocr::{OcrLine, OcrPage, OcrWord, Rect};
 use chilli_pdf::overlay::{OverlayPage, write_overlay};
 use chilli_pdf::pdf::{PageBox, PageMetadata, PageRotation};
 use lopdf::{Document, Object};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 // --- ground truth (derived from tests/fixtures/make_fixtures.py) ---
 
@@ -235,107 +239,180 @@ fn merged(
     output
 }
 
-fn have_pdftotext() -> bool {
-    Command::new("pdftotext").arg("-v").output().is_ok()
-}
+// --- in-Rust overlay verification (lopdf only, no external tools) ---
 
-fn skip_without_pdftotext() -> bool {
-    if have_pdftotext() {
-        false
-    } else {
-        eprintln!("skipping: pdftotext (poppler-utils) is not installed");
-        true
-    }
-}
-
-fn extract(pdf: &Path) -> String {
-    let out = Command::new("pdftotext")
-        .arg(pdf)
-        .arg("-")
-        .output()
-        .expect("spawn pdftotext");
-    assert!(
-        out.status.success(),
-        "pdftotext failed on {}",
-        pdf.display()
-    );
-    String::from_utf8_lossy(&out.stdout).into_owned()
-}
-
-/// One word as reported by `pdftotext -bbox` (points).
+/// One word of the appended overlay, parsed back out of the merged PDF:
+/// the decoded text plus the `Tf`/`Tz`/`Tm` operands that position it.
 #[derive(Debug)]
-struct BBoxWord {
-    x_min: f64,
-    y_min: f64,
-    x_max: f64,
-    y_max: f64,
+struct OverlayWord {
     text: String,
+    font_size: f64,
+    horizontal_scale: f64,
+    matrix: [f64; 6],
 }
 
-fn extract_bboxes(pdf: &Path) -> Vec<BBoxWord> {
-    let out = Command::new("pdftotext")
-        .arg("-bbox")
-        .arg(pdf)
-        .arg("-")
-        .output()
-        .expect("spawn pdftotext");
-    assert!(
-        out.status.success(),
-        "pdftotext -bbox failed on {}",
-        pdf.display()
+/// Parses the appended overlay content stream of a merged fixture back
+/// into its words.
+///
+/// The overlay words are written as UTF-16BE hex strings, so they can be
+/// decoded exactly on every OS — no shell, no tool-dependent encoding.
+/// This replaces the earlier `pdftotext` assertions, which broke on the
+/// Windows runner (issue #13): poppler there exits non-zero for `-bbox`
+/// and mangles non-ASCII output.
+fn overlay_words(pdf: &Path) -> Vec<OverlayWord> {
+    let doc = Document::load(pdf).expect("merged output loads");
+    let page = page_dict(&doc, 0);
+    let streams = contents_streams(&doc, &page);
+    assert_eq!(
+        streams.len(),
+        2,
+        "expected the original stream plus one overlay stream"
     );
-    let xml = String::from_utf8_lossy(&out.stdout).into_owned();
-    let mut words = Vec::new();
-    for line in xml.lines() {
-        let Some(attr_start) = line.find("<word ") else {
-            continue;
-        };
-        let attrs = &line[attr_start..];
-        let Some(text_start) = attrs.find('>') else {
-            continue;
-        };
-        let Some(text_end) = attrs[text_start..].find("</word>") else {
-            continue;
-        };
-        let attr = |name: &str| -> f64 {
-            let key = format!("{name}=\"");
-            let i = attrs.find(&key).expect("bbox attribute") + key.len();
-            let j = attrs[i..].find('"').expect("attribute end") + i;
-            attrs[i..j].parse().expect("bbox number")
-        };
-        words.push(BBoxWord {
-            x_min: attr("xMin"),
-            y_min: attr("yMin"),
-            x_max: attr("xMax"),
-            y_max: attr("yMax"),
-            text: attrs[text_start + 1..text_start + text_end].to_string(),
-        });
+    let overlay = String::from_utf8(streams[1].content.clone())
+        .expect("overlay ops are ASCII plus hex strings");
+    let lines: Vec<&str> = overlay.lines().collect();
+    assert_eq!(lines.first(), Some(&"q"), "overlay must open with q");
+    assert_eq!(lines.last(), Some(&"Q"), "overlay must close with Q");
+    assert!(
+        lines.len() >= 2,
+        "overlay must at least wrap its words in q … Q"
+    );
+    lines[1..lines.len() - 1]
+        .iter()
+        .map(|line| parse_overlay_op(line))
+        .collect()
+}
+
+/// Parses one overlay operator:
+/// `BT 3 Tr /ChilliOcrF1 <fs> Tf <tz> Tz <a b c d e f> Tm <hex> Tj ET`
+fn parse_overlay_op(line: &str) -> OverlayWord {
+    let fields: Vec<&str> = line.split_whitespace().collect();
+    assert_eq!(fields.len(), 18, "unexpected operator shape: {line:?}");
+    assert_eq!(fields[0], "BT");
+    assert_eq!(
+        fields[1], "3",
+        "text render mode must stay invisible (3): {line:?}"
+    );
+    assert_eq!(fields[2], "Tr");
+    assert_eq!(fields[3], "/ChilliOcrF1");
+    assert_eq!(fields[5], "Tf");
+    assert_eq!(fields[7], "Tz");
+    assert_eq!(fields[14], "Tm");
+    assert_eq!(fields[16], "Tj");
+    assert_eq!(fields[17], "ET");
+    let number = |index: usize| {
+        fields[index]
+            .parse::<f64>()
+            .unwrap_or_else(|_| panic!("operand {index} is not a number: {line:?}"))
+    };
+    OverlayWord {
+        text: decode_hex_text(fields[15]),
+        font_size: number(4),
+        horizontal_scale: number(6),
+        matrix: [
+            number(8),
+            number(9),
+            number(10),
+            number(11),
+            number(12),
+            number(13),
+        ],
     }
-    words
 }
 
-/// A parsed word whose text matches and whose top-left sits within
-/// `tolerance` pt of the expected display-space box top-left.
-fn assert_word_near(words: &[BBoxWord], text: &str, exp_left: f64, exp_top: f64, tolerance: f64) {
-    let found = words.iter().any(|w| {
-        w.text == text
-            && (w.x_min - exp_left).abs() <= tolerance
-            && (w.y_min - exp_top).abs() <= tolerance
-    });
-    assert!(
-        found,
-        "no extracted '{text}' at ({exp_left:.2}, {exp_top:.2}) ±{tolerance}; \
-         extracted: {words:?}"
+/// Decodes the `<UTF-16BE hex>` operand of a `Tj` back into text,
+/// stripping the one trailing space the writer appends.
+fn decode_hex_text(field: &str) -> String {
+    let hex = field
+        .strip_prefix('<')
+        .and_then(|h| h.strip_suffix('>'))
+        .expect("hex string delimiters");
+    assert_eq!(
+        hex.len() % 4,
+        0,
+        "each UTF-16 code unit is 4 hex digits: {field:?}"
     );
+    let units: Vec<u16> = (0..hex.len())
+        .step_by(4)
+        .map(|i| u16::from_str_radix(&hex[i..i + 4], 16).expect("hex code unit"))
+        .collect();
+    let mut text = String::from_utf16(&units).expect("valid UTF-16BE text");
+    assert_eq!(text.pop(), Some(' '), "exactly one trailing space");
+    text
 }
 
-// --- extraction tests ---
+/// Golden expectations for one fixture's overlay words, derived straight
+/// from the spike's display→user-space table (`docs/spike-report.md`
+/// §3) rather than from the production code, so this stays a real
+/// cross-check: with the display size in POINTS (`display_pt`), the
+/// crop-box origin and the page rotation, each word's baseline anchor is
+/// the display-space bottom-left corner mapped back through the inverse
+/// rotation. Font size is the OCR box height in points and `Tz` stretches
+/// the glyphless font's fixed 0.5 em advance to the box width.
+fn expected_overlay_words(
+    words: &[(&str, i32, i32, i32, i32)],
+    display_pt: (f64, f64),
+    crop: PageBox,
+    rotation: PageRotation,
+) -> Vec<OverlayWord> {
+    const PT_PER_PX: f64 = 0.5; // the fixtures are 144 DPI
+    let (w, h) = display_pt;
+    words
+        .iter()
+        .map(|&(text, left, top, right, bottom)| {
+            let (dx, dy) = (f64::from(left) * PT_PER_PX, f64::from(bottom) * PT_PER_PX);
+            let font_size = f64::from(bottom - top) * PT_PER_PX;
+            let codes = text.encode_utf16().count() as f64;
+            let horizontal_scale =
+                100.0 * f64::from(right - left) * PT_PER_PX / (0.5 * font_size * codes);
+            let (matrix, a, b) = match rotation {
+                PageRotation::None => ([1.0, 0.0, 0.0, 1.0], dx, h - dy),
+                PageRotation::Degrees90 => ([0.0, 1.0, -1.0, 0.0], dy, dx),
+                PageRotation::Degrees180 => ([-1.0, 0.0, 0.0, -1.0], w - dx, dy),
+                PageRotation::Degrees270 => ([0.0, -1.0, 1.0, 0.0], h - dy, w - dx),
+            };
+            OverlayWord {
+                text: text.to_string(),
+                font_size,
+                horizontal_scale,
+                matrix: [
+                    matrix[0],
+                    matrix[1],
+                    matrix[2],
+                    matrix[3],
+                    crop.left + a,
+                    crop.bottom + b,
+                ],
+            }
+        })
+        .collect()
+}
+
+/// Parsed words must match the golden expectations exactly: text is the
+/// Hungarian ő/ű round-trip, and the numbers may only differ by the
+/// two-decimal formatting of the operators (±0.006).
+fn assert_overlay_matches(actual: &[OverlayWord], expected: &[OverlayWord]) {
+    assert_eq!(actual.len(), expected.len(), "overlay word count");
+    for (got, want) in actual.iter().zip(expected) {
+        assert_eq!(got.text, want.text, "decoded overlay text");
+        assert!(
+            (got.font_size - want.font_size).abs() < 0.006,
+            "font size: got {got:?}, want {want:?}"
+        );
+        assert!(
+            (got.horizontal_scale - want.horizontal_scale).abs() < 0.006,
+            "Tz: got {got:?}, want {want:?}"
+        );
+        for (got, want) in got.matrix.iter().zip(want.matrix) {
+            assert!((got - want).abs() < 0.006, "Tm: got {got:?}, want {want:?}");
+        }
+    }
+}
+
+// --- text round-trip tests ---
 
 #[test]
 fn eng_scan_words_are_selectable() {
-    if skip_without_pdftotext() {
-        return;
-    }
     let pdf = merged(
         "eng_scan.pdf",
         "eng_merged.pdf",
@@ -346,30 +423,17 @@ fn eng_scan_words_are_selectable() {
             crop_box: LETTER,
         },
     );
-    let text = extract(&pdf);
-    for expected in [
-        "Chilli",
-        "converts",
-        "scanned",
-        "searchable",
-        "Offline",
-        "machine.",
-        "Tesseract",
-        "aligns.",
-        "PDFium",
-    ] {
-        assert!(
-            text.contains(expected),
-            "expected '{expected}' in: {text:?}"
-        );
-    }
+    let words = overlay_words(&pdf);
+    let decoded: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+    let expected: Vec<&str> = ENG_WORDS.iter().map(|w| w.0).collect();
+    assert_eq!(
+        decoded, expected,
+        "the overlay must carry every word of the page, in order"
+    );
 }
 
 #[test]
 fn hun_scan_preserves_double_acute_diacritics() {
-    if skip_without_pdftotext() {
-        return;
-    }
     let pdf = merged(
         "hun_scan.pdf",
         "hun_merged.pdf",
@@ -380,29 +444,20 @@ fn hun_scan_preserves_double_acute_diacritics() {
             crop_box: LETTER,
         },
     );
-    let text = extract(&pdf);
-    for expected in [
-        "Őssel",
-        "őz",
-        "űrhajósok",
-        "űrállomáson.",
-        "Árvíztűrő",
-        "tükörfúrógép.",
-        "erdőnek.",
-        "Tűzön",
-    ] {
-        assert!(
-            text.contains(expected),
-            "expected '{expected}' in: {text:?}"
-        );
-    }
+    // Decoding the UTF-16BE hex strings back must reproduce ő/ű exactly
+    // — this is the copy-paste round-trip, with no tool encoding in
+    // between (the old `pdftotext` variant read mojibake on Windows).
+    let words = overlay_words(&pdf);
+    let decoded: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+    let expected: Vec<&str> = HUN_WORDS.iter().map(|w| w.0).collect();
+    assert_eq!(
+        decoded, expected,
+        "Hungarian words must round-trip through the overlay byte-exactly"
+    );
 }
 
 #[test]
 fn rotated_scan_words_read_upright_after_rotation() {
-    if skip_without_pdftotext() {
-        return;
-    }
     // Display pixel space is the upright portrait page (612×792 pt at
     // 144 DPI = 1224×1584 px) even though the stored image is sideways.
     let pdf = merged(
@@ -415,20 +470,17 @@ fn rotated_scan_words_read_upright_after_rotation() {
             crop_box: LANDSCAPE,
         },
     );
-    let text = extract(&pdf);
-    for expected in ["sideways", "upright", "rotation", "marked", "correctly."] {
-        assert!(
-            text.contains(expected),
-            "expected '{expected}' in: {text:?}"
-        );
-    }
+    let words = overlay_words(&pdf);
+    let decoded: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+    let expected: Vec<&str> = ROTATED_WORDS.iter().map(|w| w.0).collect();
+    assert_eq!(
+        decoded, expected,
+        "the overlay must carry every word of the rotated page, in order"
+    );
 }
 
 #[test]
 fn cropbox_scan_words_align_inside_the_cropped_area() {
-    if skip_without_pdftotext() {
-        return;
-    }
     // Display pixel space is the crop region itself: 540×720 pt at 144 DPI
     // = 1080×1440 px; ground-truth boxes are offset by 36 pt (72 px).
     let pdf = merged(
@@ -441,22 +493,19 @@ fn cropbox_scan_words_align_inside_the_cropped_area() {
             crop_box: INSET,
         },
     );
-    let text = extract(&pdf);
-    for expected in ["crop", "inset", "align", "visible", "trims", "paper."] {
-        assert!(
-            text.contains(expected),
-            "expected '{expected}' in: {text:?}"
-        );
-    }
+    let words = overlay_words(&pdf);
+    let decoded: Vec<&str> = words.iter().map(|w| w.text.as_str()).collect();
+    let expected: Vec<&str> = CROPBOX_WORDS.iter().map(|w| w.0).collect();
+    assert_eq!(
+        decoded, expected,
+        "the overlay must carry every word of the cropped page, in order"
+    );
 }
 
 // --- position tests ---
 
 #[test]
 fn eng_overlay_sits_on_the_words() {
-    if skip_without_pdftotext() {
-        return;
-    }
     let pdf = merged(
         "eng_scan.pdf",
         "eng_position.pdf",
@@ -467,19 +516,14 @@ fn eng_overlay_sits_on_the_words() {
             crop_box: LETTER,
         },
     );
-    let words = extract_bboxes(&pdf);
-    // 144 DPI → 0.5 pt per px. pdftotext -bbox measures from the page
-    // top-left with the display rotation applied.
-    for (text, l, t, _r, _b) in ENG_WORDS {
-        assert_word_near(&words, text, f64::from(*l) / 2.0, f64::from(*t) / 2.0, 2.5);
-    }
+    assert_overlay_matches(
+        &overlay_words(&pdf),
+        &expected_overlay_words(ENG_WORDS, (612.0, 792.0), LETTER, PageRotation::None),
+    );
 }
 
 #[test]
 fn rotated_overlay_transposes_correctly() {
-    if skip_without_pdftotext() {
-        return;
-    }
     let pdf = merged(
         "rotated_scan.pdf",
         "rotated_position.pdf",
@@ -490,52 +534,23 @@ fn rotated_overlay_transposes_correctly() {
             crop_box: LANDSCAPE,
         },
     );
-
-    // pdftotext -bbox garbles positions on /Rotate 90 pages (spike §6
-    // pitfall); strip /Rotate from a copy first so the raw user-space
-    // coordinates are reported directly.
-    let stripped = tmp("rotated_position_stripped.pdf");
-    let mut doc = Document::load(&pdf).unwrap();
-    let page_id = *doc.get_pages().values().next().unwrap();
-    doc.get_object_mut(page_id)
-        .unwrap()
-        .as_dict_mut()
-        .unwrap()
-        .remove(b"Rotate");
-    doc.save(&stripped).unwrap();
-
-    let words = extract_bboxes(&stripped);
-    // R90 mapping (spike §3): user = (dy_bottom, dx_left) → a word with
-    // display box (dx_left, dy_top, dx_right, dy_bottom) pt lands at raw
-    // x = dy_top..dy_bottom, y-from-top = 612−dx_right..612−dx_left.
-    for (text, l, t, r, b) in [
-        ("sideways", 496.0, 151.0, 661.0, 185.0),
-        ("upright", 676.0, 215.0, 806.0, 249.0),
-        ("marked", 752.0, 151.0, 889.0, 178.0),
-        ("correctly.", 871.0, 279.0, 1035.0, 313.0),
-    ] {
-        let (dx_l, dy_t, dx_r, dy_b) = (l / 2.0, t / 2.0, r / 2.0, b / 2.0);
-        assert_word_near(&words, text, dy_t, 612.0 - dx_r, 3.0);
-        // Also check the far corner of the transposed box.
-        let found = words.iter().any(|w| {
-            w.text == text
-                && (w.x_max - dy_b).abs() <= 4.0
-                && (w.y_max - (612.0 - dx_l)).abs() <= 4.0
-        });
-        assert!(
-            found,
-            "'{text}' does not span ({dy_t:.2}..{dy_b:.2}, {}..{}): {words:?}",
-            612.0 - dx_r,
-            612.0 - dx_l
-        );
-    }
+    // The stored image is sideways; display pixel space is the upright
+    // portrait page. Every word's Tm must transpose through the inverse
+    // /Rotate 90 mapping (spike §3): user = (dy_bottom, dx_left) in the
+    // landscape crop box, with the 90° rotation matrix `0 1 -1 0`.
+    assert_overlay_matches(
+        &overlay_words(&pdf),
+        &expected_overlay_words(
+            ROTATED_WORDS,
+            (612.0, 792.0),
+            LANDSCAPE,
+            PageRotation::Degrees90,
+        ),
+    );
 }
 
 #[test]
 fn cropbox_overlay_positions_are_media_absolute() {
-    if skip_without_pdftotext() {
-        return;
-    }
     let pdf = merged(
         "cropbox_scan.pdf",
         "cropbox_position.pdf",
@@ -546,22 +561,14 @@ fn cropbox_overlay_positions_are_media_absolute() {
             crop_box: INSET,
         },
     );
-    let words = extract_bboxes(&pdf);
-    // pdftotext -bbox reports MEDIA-absolute user-space coordinates (verified
-    // empirically: values are identical with and without a CropBox), y-down
-    // from the MediaBox top. The OCR display space is the crop region, so
-    // the expected position is the display-space box (0.5 pt per px) offset
-    // by the crop-box origin (36, 36) — and y-down top of the crop region
-    // sits 36 pt below the MediaBox top as well (792 − 756 = 36).
-    for (text, l, t, _r, _b) in CROPBOX_WORDS {
-        assert_word_near(
-            &words,
-            text,
-            36.0 + f64::from(*l) / 2.0,
-            36.0 + f64::from(*t) / 2.0,
-            2.5,
-        );
-    }
+    // PDF user space is media-absolute: a crop box never moves the
+    // origin, so the overlay must add the crop-box origin (36, 36) to
+    // every display-space anchor itself. Display space here is the
+    // 540×720 pt crop region.
+    assert_overlay_matches(
+        &overlay_words(&pdf),
+        &expected_overlay_words(CROPBOX_WORDS, (540.0, 720.0), INSET, PageRotation::None),
+    );
 }
 
 // --- appearance-preservation tests (lopdf only, always run) ---
@@ -744,6 +751,30 @@ fn merged_output_preserves_the_original_appearance() {
             "{input}: {text:?}"
         );
         assert!(text.ends_with("Q\n"));
+
+        // The glyphless font is wired into the page resources, so real
+        // viewers can decode the overlay (the overlay words reference it
+        // as /ChilliOcrF1 and it must resolve to a Type0 font).
+        let resources = deref(&after, after_page.get(b"Resources").unwrap());
+        let fonts = deref(&after, resources.as_dict().unwrap().get(b"Font").unwrap());
+        let font = deref(
+            &after,
+            fonts
+                .as_dict()
+                .unwrap()
+                .get(b"ChilliOcrF1")
+                .unwrap_or_else(|_| panic!("{input}: /ChilliOcrF1 is missing from /Resources")),
+        );
+        assert_eq!(
+            font.as_dict()
+                .unwrap()
+                .get(b"Subtype")
+                .unwrap()
+                .as_name()
+                .unwrap(),
+            b"Type0",
+            "{input}: overlay font must be a Type0 font"
+        );
     }
 }
 
