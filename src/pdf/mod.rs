@@ -315,6 +315,13 @@ pub trait PdfDocument<'a> {
     /// `options.target_dpi`, reporting the DPI actually used.
     fn render_page(&self, page: usize, options: RenderOptions) -> Result<RenderedImage, PdfError>;
 
+    /// The page's existing embedded text, if any (zero-based index).
+    ///
+    /// Extracted before rendering so the skip-text heuristic
+    /// (`crate::skip_text`) can leave already-searchable pages alone. An
+    /// empty string means the page carries no text layer.
+    fn page_text(&self, page: usize) -> Result<String, PdfError>;
+
     /// Save the document — rendered appearance unchanged — to `destination`,
     /// producing a file the OCR overlay can later extend.
     fn save_as(&self, destination: &Path) -> Result<(), PdfError>;
