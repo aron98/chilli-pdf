@@ -203,11 +203,15 @@ impl PageOverlay for LopdfOverlay {
         font: &[u8],
         sink: &mut dyn Write,
     ) -> Result<(), OverlayError> {
-        // The pipeline collects results only for pages that needed OCR
-        // (already-searchable pages are skipped), so hand them over with
-        // their zero-based page indices and let the overlay writer merge
-        // by index; pages without an entry are left untouched (issue #18).
-        let indexed: Vec<(usize, crate::overlay::OverlayPage)> = pages
+        // The pipeline collects OCR results only for the pages that
+        // needed them: pages that are already searchable are skipped, so
+        // `pages` is a sparse subset of the document's pages. Pair each
+        // result with its zero-based page index and use the indexed
+        // writer, which places every entry on its own page and leaves
+        // the rest untouched. Pairing positionally instead would misalign
+        // or reject mixed text/scan documents (regression guarded by
+        // `mixed_document_overlays_only_the_scanned_page`).
+        let overlay_pages: Vec<(usize, crate::overlay::OverlayPage)> = pages
             .iter()
             .map(|result| {
                 (
@@ -219,7 +223,7 @@ impl PageOverlay for LopdfOverlay {
                 )
             })
             .collect();
-        crate::overlay::write_overlay_indexed_to(input, &indexed, font, sink).map_err(|err| {
+        crate::overlay::write_overlay_indexed_to(input, &overlay_pages, font, sink).map_err(|err| {
             OverlayError::Failed {
                 message: err.to_string(),
             }
