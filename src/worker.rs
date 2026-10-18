@@ -172,8 +172,8 @@ impl std::error::Error for OverlayError {}
 /// The seam is sink-based (rather than writing to a path itself) so the
 /// output goes through the transactional writer: whatever the overlay
 /// streams lands in the temp file and only the completed document is
-/// renamed into place. The real implementation is milestone #13; until it
-/// merges the production converter uses [`UnimplementedOverlay`].
+/// renamed into place. The production implementation is
+/// [`LopdfOverlay`], an adapter over `src/overlay` (issue #13).
 pub trait PageOverlay: Send + Sync {
     /// Read the original document at `input`, add the searchable text
     /// layer for `pages` (using `font` — the glyphless TrueType font — for
@@ -187,22 +187,34 @@ pub trait PageOverlay: Send + Sync {
     ) -> Result<(), OverlayError>;
 }
 
-/// Placeholder real-world overlay: every conversion reaches it and reports
-/// the typed "pending milestone #13" failure, so the wiring end-to-end is
-/// exercised until the overlay lands.
-pub struct UnimplementedOverlay;
+/// Production overlay: adapts the `src/overlay` writer (issue #13) to the
+/// pipeline's sink-based seam.
+///
+/// The overlay module loads the original document object-by-object with
+/// `lopdf`, appends the invisible text streams, and serializes the result
+/// straight into the transactional writer's sink.
+pub struct LopdfOverlay;
 
-impl PageOverlay for UnimplementedOverlay {
+impl PageOverlay for LopdfOverlay {
     fn apply_overlay(
         &self,
-        _input: &Path,
-        _pages: &[PageOcrResult],
-        _font: &[u8],
-        _sink: &mut dyn Write,
+        input: &Path,
+        pages: &[PageOcrResult],
+        font: &[u8],
+        sink: &mut dyn Write,
     ) -> Result<(), OverlayError> {
-        // TODO(#13): replace with an adapter over src/overlay's real
-        // implementation once issue #13 merges.
-        Err(OverlayError::Pending)
+        let overlay_pages: Vec<crate::overlay::OverlayPage> = pages
+            .iter()
+            .map(|result| crate::overlay::OverlayPage {
+                ocr: result.ocr.clone(),
+                metadata: result.metadata,
+            })
+            .collect();
+        crate::overlay::write_overlay_to(input, &overlay_pages, font, sink).map_err(|err| {
+            OverlayError::Failed {
+                message: err.to_string(),
+            }
+        })
     }
 }
 
@@ -417,7 +429,7 @@ impl PipelineConverter {
     }
 
     /// The production converter: bundled PDFium and Tesseract via the
-    /// extracted assets, and the placeholder overlay until milestone #13.
+    /// extracted assets, and the `src/overlay` writer behind the seam.
     ///
     /// Construction cannot fail: the engines are created lazily on the
     /// actor thread at the first job (and retried on later jobs if a
@@ -428,11 +440,11 @@ impl PipelineConverter {
         Self::new(
             Arc::new(production_pdf_engine),
             Arc::new(production_ocr_engine),
-            // TODO(#13): replace with an adapter over src/overlay's real
-            // implementation once it merges, and bundle the glyphless font
-            // (pdf.ttf) in the asset manifest so `font` can be its bytes.
-            Arc::new(UnimplementedOverlay),
-            Vec::new(),
+            Arc::new(LopdfOverlay),
+            // TODO(#9/#19): move the glyphless font into the bundled asset
+            // manifest and take its bytes from the extracted assets
+            // instead of embedding the fixture copy.
+            include_bytes!("../tests/fixtures/pdf.ttf").to_vec(),
         )
     }
 }
@@ -753,6 +765,9 @@ impl OcrPaths for AssetOcrPaths {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ocr::OcrLine;
+    use crate::ocr::OcrWord;
+    use crate::ocr::Rect;
     use crate::pdf::MockEngine;
     use crate::pdf::MockPageSpec;
     use crate::pdf::PdfDocument;
@@ -1101,32 +1116,64 @@ mod tests {
         assert_eq!(inbox.try_iter().count(), 0);
     }
 
+    /// OCR factory whose recogniser returns one scripted page regardless
+    /// of the image it is handed — for wiring tests through the real
+    /// overlay.
+    struct ScriptedOcr(OcrPage);
+
+    impl PageRecognizer for ScriptedOcr {
+        fn recognize(&mut self, _image: &OcrImage<'_>) -> Result<OcrPage, OcrError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    fn scripted_ocr(page: OcrPage) -> OcrFactory {
+        Arc::new(move |_preset| Ok(Box::new(ScriptedOcr(page.clone())) as Box<dyn PageRecognizer>))
+    }
+
+    /// One full page of OCR output, geometry-consistent with a mocked
+    /// US Letter render at 300 DPI (2550 × 3300 px).
+    fn word_page() -> OcrPage {
+        let rect = Rect::new(100, 100, 400, 150);
+        OcrPage {
+            width: 2550,
+            height: 3300,
+            dpi: 300,
+            lines: vec![OcrLine {
+                rect,
+                words: vec![OcrWord {
+                    text: "hello".to_owned(),
+                    confidence: 95.0,
+                    rect,
+                }],
+            }],
+        }
+    }
+
     #[test]
-    fn unimplemented_overlay_reports_pending_milestone() {
-        let dir = scratch_dir("overlay-pending");
-        let input = write_input(&dir, &minimal_pdf());
+    fn lopdf_overlay_publishes_a_searchable_pdf() {
+        // The overlay reads the input file itself, so this test needs a
+        // real (lopdf-loadable) PDF: the spike's one-page scan fixture.
+        let input = Path::new("tests/fixtures/eng_scan.pdf");
+        assert!(input.is_file(), "fixture eng_scan.pdf must exist");
+        let original_bytes = fs::read(input).expect("read fixture");
+        let dir = scratch_dir("overlay-real");
         let output = dir.join("searchable.pdf");
+        let font = include_bytes!("../tests/fixtures/pdf.ttf");
 
         let (events, inbox) = mpsc::channel();
-        let error = convert_document(
-            &job(&input, &output),
+        convert_document(
+            &job(input, &output),
             &MockEngine::with_pages(1),
-            &fake_ocr(empty_log(), None),
-            &UnimplementedOverlay,
-            &[],
+            &scripted_ocr(word_page()),
+            &LopdfOverlay,
+            font,
             &CancelHandle::fresh(),
             &events,
         )
-        .expect_err("the placeholder overlay cannot publish");
+        .expect("the real overlay must publish");
 
-        assert!(matches!(error, ConversionError::OverlayPending));
-        let message = error.user_message();
-        assert!(
-            message.contains("issue #13"),
-            "the message should name the overlay milestone, got: {message}"
-        );
-        // The page itself still reported progress before the overlay
-        // refused to publish.
+        // The page reported progress before the merge.
         assert_eq!(
             inbox.try_iter().collect::<Vec<WorkerEvent>>(),
             vec![WorkerEvent::Progress {
@@ -1134,8 +1181,69 @@ mod tests {
                 total_pages: 1
             }]
         );
+
+        // The output is a valid single-page PDF whose page now carries the
+        // overlay content stream in addition to the original one(s).
+        let merged = lopdf::Document::load(&output).expect("merged output must be loadable");
+        let pages = merged.get_pages();
+        assert_eq!(pages.len(), 1);
+        let page_id = *pages.values().next().expect("one page object");
+        let page = merged
+            .get_object(page_id)
+            .expect("page object")
+            .as_dict()
+            .expect("page dictionary");
+        let contents = page.get(b"Contents").expect("page contents");
+        let lopdf::Object::Array(items) = contents else {
+            panic!("expected a /Contents array, got {contents:?}");
+        };
+        assert!(
+            items.len() >= 2,
+            "the overlay stream must be appended to the original content"
+        );
+
+        // The original is untouched, byte for byte.
+        assert_eq!(fs::read(input).unwrap(), original_bytes);
+        assert!(no_temp_files(&dir).is_empty());
+    }
+
+    #[test]
+    fn lopdf_overlay_maps_unreadable_input_to_overlay_error() {
+        let dir = scratch_dir("overlay-unreadable");
+        // `minimal_pdf` passes validation but its broken xref leaves lopdf
+        // with zero pages against the engine's one scripted OCR result, so
+        // the overlay fails with a typed, content-free error.
+        let input = write_input(&dir, &minimal_pdf());
+        let output = dir.join("searchable.pdf");
+        let font = include_bytes!("../tests/fixtures/pdf.ttf");
+
+        let (events, inbox) = mpsc::channel();
+        let error = convert_document(
+            &job(&input, &output),
+            &MockEngine::with_pages(1),
+            &scripted_ocr(word_page()),
+            &LopdfOverlay,
+            font,
+            &CancelHandle::fresh(),
+            &events,
+        )
+        .expect_err("an unloadable input must fail the overlay");
+
+        // The failure is the typed overlay error, and the message names
+        // the problem without leaking the input's contents.
+        assert!(matches!(error, ConversionError::Overlay(_)));
+        let message = error.user_message();
+        assert!(
+            message.contains("page") && message.contains("0"),
+            "the message should describe the failure, got: {message}"
+        );
+        assert!(
+            !message.contains("%PDF"),
+            "the message must not leak document contents, got: {message}"
+        );
         assert!(!output.exists());
         assert!(no_temp_files(&dir).is_empty());
+        assert_eq!(inbox.try_iter().count(), 1);
     }
 
     #[test]
