@@ -26,6 +26,17 @@ needs a real Mac.
 | 5 | Test mixed searchable/scanned pages, cancellation, malformed input, password-protected input, Unicode paths, output collisions, and a larger multipage document | ⏳ pending |
 | 6 | Confirm runtime processing makes no network requests | ⏳ pending |
 
+Check 6 (runtime network): the enforceable, already-active parts are the
+CI dependency gate (`deny` job running `cargo deny check bans licenses`,
+plus a `tokio/net` feature check — added by issue #20) and the static
+content/network audit in `docs/privacy-audit.md`. Those prove no
+network-capable crate is linked and no message path can carry document
+contents, but they cannot prove the absence of OS-level connections at
+runtime. The strongest form of this check — zero connection attempts
+observed from outside the process (firewall rules or a network-isolated
+VM), on a real machine with the release binary — belongs to the
+acceptance phase (issue #21) and stays ⏳ pending until then.
+
 ## Issue #17: Cross-platform desktop integration
 
 Everything below that is marked ✅ is proven by unit tests executed
@@ -70,10 +81,47 @@ machine and is **not** claimed as done.
 - [ ] Release artifacts built by CI with SHA-256 checksums published
 - [ ] Bundled asset manifest verified against embedded checksums at extraction
 - [ ] No document contents in any error message or log
+      (repeatable method and current results: `docs/privacy-audit.md`)
 - [ ] Temporary files removed after success, cancellation, and failure
-- [ ] Input file byte-identical before and after a conversion (checksum)
+- [x] Input file byte-identical before and after a conversion (checksum) —
+  asserted by every test in `tests/preservation.rs` via its `merged()` helper
+  (and by `tests/overlay.rs::merged_output_preserves_the_original_appearance`)
 - [ ] Output file absent after a cancelled or failed conversion
 - [ ] `THIRD_PARTY_NOTICES.md` complete and shipped with the binary
+
+## Preservation checks verified by automated tests (issue #14)
+
+All checks below were actually executed and pass as part of the full gate
+(`cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+`cargo test`) on the dev machine:
+
+- [x] Metadata: the trailer's `/Info` dictionary survives with every
+  entry unchanged, including UTF-16BE titles with Hungarian letters
+  (`ő`, `ű`), dates, and custom keys; metadata is carried over untouched
+  and `ModDate` is deliberately not bumped —
+  `tests/preservation.rs::info_dict_entries_survive_the_overlay`,
+  `tests/preservation.rs::rotated_page_with_metadata_survives_the_overlay`
+- [x] Bookmarks/outline: a three-level outline survives with titles,
+  nesting, and destinations (both `/Dest` arrays and GoTo actions)
+  intact —
+  `tests/preservation.rs::outline_titles_and_destinations_survive_the_overlay`
+- [x] Links: internal (`/Dest` and `/A` GoTo) and external (`/URI`)
+  link annotations keep their object ids, hit rectangles, and targets;
+  the overlay adds no annotations —
+  `tests/preservation.rs::internal_and_external_links_survive_the_overlay`
+- [x] Page tree: page count, object ids, `/Kids` order, `/MediaBox`,
+  `/CropBox`, and `/Rotate` (including a 90°-rotated page) are
+  unchanged; the overlay stream is appended to `/Contents` —
+  `tests/preservation.rs::page_tree_and_order_are_unchanged_for_every_fixture`,
+  `tests/overlay.rs::merged_output_preserves_the_original_appearance`
+- [x] Existing page font resources are kept; the OCR font is added
+  alongside them —
+  `tests/preservation.rs::existing_font_resources_are_kept_beside_the_overlay_font`
+- [x] Documents whose cross-reference data requires last-resort repair
+  are refused as unreadable instead of being edited through a guessed
+  xref table —
+  `tests/overlay.rs::input_needing_xref_repair_is_refused_as_unreadable`,
+  `src/worker.rs` unit test `lopdf_overlay_maps_unreadable_input_to_overlay_error`
 
 ## Environment limitations to disclose in the release report
 

@@ -1,0 +1,163 @@
+# cargo-deny configuration for chilli-pdf (issue #20 privacy audit).
+#
+# WHY THIS FILE EXISTS
+#
+# docs/product-requirements.md makes two hard promises: the app never
+# touches the network at runtime, and it never writes document contents
+# to errors or logs. This configuration enforces the first one at the
+# dependency level: introducing a crate whose purpose is network I/O
+# fails `cargo deny check bans` in CI.
+#
+# THREAT MODEL
+#
+# The product ships a native desktop binary. Runtime network access is
+# forbidden outright — not "no unwanted telemetry" but NO sockets, NO
+# HTTP, NO DNS, nothing. Build-time network use (crates.io, CI) is fine.
+#
+# The deny list below bans crates whose primary purpose is network I/O
+# (HTTP/SSH/FTP/mail/DB clients and servers, TLS stacks, DNS resolvers,
+# WebSocket implementations) plus the low-level async-net enablers
+# (`mio`, `socket2`, `net2`) so that even an indirect feature-combo such
+# as `tokio/net` cannot link in. Crates that merely PARSE network
+# formats (`url`, `idna`, `httparse`-style) without performing I/O are
+# handled case-by-case by the vetting checklist in
+# docs/privacy-audit.md; `url` (via `webbrowser` via `egui-winit`) is
+# the one such crate currently in the tree and is documented there.
+#
+# VETTING NEW DEPENDENCIES
+#
+# Before adding a dependency, answer docs/privacy-audit.md's checklist.
+# The audit is repeatable: run `cargo deny check bans licenses` (no
+# network needed for either check) and the grep commands listed there.
+# If a new crate genuinely needs to be network-capable, that is a
+# product-level decision: the requirement must change FIRST, not the
+# gate.
+
+[graph]
+# Audit the full graph, all features, exactly as the release build
+# compiles it (the `gui` feature is on by default).
+all-features = true
+
+[advisories]
+version = 2
+# CI runs `cargo deny check bans licenses` only: the advisory database
+# lives in a network-fetched git repository, so the advisories check is
+# deliberately left OUT of the offline gate. Local full audits
+# (documented in docs/privacy-audit.md) may run it with network access.
+# `yanked = "deny"` (the version-2 default) keeps local runs strict.
+
+[bans]
+# Duplicate versions in the GUI stack are a hygiene concern, not a
+# privacy one — warn, do not fail.
+multiple-versions = "warn"
+highlight = "all"
+
+# Crates that provide or enable network I/O. NONE of these are in the
+# current tree; adding any of them fails the gate.
+deny = [
+    # HTTP clients and helpers.
+    { name = "reqwest" },
+    { name = "ureq" },
+    { name = "curl" },
+    { name = "curl-sys" },
+    { name = "isahc" },
+    { name = "attohttpc" },
+    { name = "minreq" },
+    { name = "surf" },
+    # HTTP protocol machinery (types/clients/servers) — httparse-style
+    # pure parsers may be vetted as an exception via the checklist.
+    { name = "http" },
+    { name = "http-body" },
+    { name = "http-body-util" },
+    { name = "hyper" },
+    { name = "hyper-util" },
+    { name = "h2" },
+    # TLS stacks and bindings.
+    { name = "native-tls" },
+    { name = "tokio-native-tls" },
+    { name = "openssl" },
+    { name = "openssl-sys" },
+    { name = "rustls" },
+    { name = "rustls-pki-types" },
+    { name = "rustls-webpki" },
+    { name = "webpki-roots" },
+    { name = "tokio-rustls" },
+    { name = "hyper-rustls" },
+    { name = "hyper-tls" },
+    # Async network drivers. Banning mio/socket2/net2 also blocks the
+    # `tokio/net` feature-combo: tokio cannot link net code without
+    # them. (tokio itself is not banned — see the note below.)
+    { name = "mio" },
+    { name = "socket2" },
+    { name = "net2" },
+    # WebSockets.
+    { name = "tungstenite" },
+    { name = "tokio-tungstenite" },
+    { name = "async-tungstenite" },
+    { name = "soketto" },
+    # DNS resolvers.
+    { name = "hickory-resolver" },
+    { name = "hickory-proto" },
+    { name = "trust-dns-resolver" },
+    { name = "trust-dns-proto" },
+    { name = "c-ares" },
+    { name = "c-ares-sys" },
+    # Remote-access and transfer protocols.
+    { name = "ssh2" },
+    { name = "libssh2-sys" },
+    { name = "ftp" },
+    { name = "ftp3" },
+    # Network-capable database clients (local embedded stores are fine;
+    # remote sockets are not).
+    { name = "redis" },
+    { name = "tokio-postgres" },
+    { name = "postgres" },
+    { name = "mysql" },
+    { name = "mysql_async" },
+    # Mail senders (SMTP implies sockets).
+    { name = "lettre" },
+    { name = "lettre_email" },
+    { name = "smtp" },
+]
+
+# `tokio` IS in the tree — but only as a wasm-target dependency of
+# `wasm-bindgen-futures` (pulled in through pdfium-render/rfd/wgpu)
+# with features limited to `rt` and `time`: no `net`. Banning tokio
+# outright would break the GUI stack for nothing, so it is NOT on the
+# deny list; the `mio`/`socket2`/`net2` bans above make `tokio/net`
+# impossible to link, and docs/privacy-audit.md documents the
+# `cargo tree -e features` command that proves the feature set.
+#
+# NOTE: no `bans.allow` list is used — a non-empty `allow` list would
+# switch the check into allowlist mode (every other crate denied),
+# which is not the semantics wanted here.
+
+[licenses]
+version = 2
+# Everything in the tree must be one of these permissive licenses.
+# Notes: `pdfium-render` is MIT; `lopdf` is MIT. The gui stack is
+# MIT OR Apache-2.0 throughout; the icu/unicode data crates use the
+# SPDX Unicode-3.0 license. `clipboard-win`/`error-code` (rfd's Windows
+# clipboard stack) use the Boost Software License.
+# `epaint_default_fonts` embeds the egui UI fonts under the SIL Open
+# Font License 1.1 (which covers the Ubuntu and emoji fonts it ships;
+# their original Ubuntu Font Licence text is also present and
+# explicitly permitted here).
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "ISC",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "Zlib",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "BSL-1.0",
+    "OFL-1.1",
+    "Ubuntu-font-1.0",
+]
+# Comments in crate sources are not legal advice; confidence 0.92 is the
+# cargo-deny-recommended default for better false-positive filtering.
+confidence-threshold = 0.92

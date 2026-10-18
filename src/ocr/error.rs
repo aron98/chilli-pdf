@@ -154,4 +154,61 @@ mod tests {
             assert!(!text.is_empty());
         }
     }
+
+    /// Content-freedom pin for the OCR failure paths (issue #20 audit).
+    ///
+    /// The privacy spec forbids document contents in any message.
+    /// `OcrError` has no variant that can carry recognized text or image
+    /// pixels: every field is a path, language code, symbol name,
+    /// OS/library-load message or image dimension. These exact-string
+    /// assertions pin the `Display` format functions for the failure
+    /// paths, so a future variant that interpolates OCR output must
+    /// change this test to be noticed.
+    #[test]
+    fn error_messages_are_content_free() {
+        // The recognition failure path (Tesseract fails mid-page):
+        // only the language code is interpolated, never page text.
+        assert_eq!(
+            OcrError::RecognitionFailed {
+                language: "eng+hun".into()
+            }
+            .to_string(),
+            "Tesseract failed to recognise a page for language `eng+hun`"
+        );
+        // Initialisation failure: language code only.
+        assert_eq!(
+            OcrError::InitialisationFailed {
+                language: "eng".into()
+            }
+            .to_string(),
+            "Tesseract failed to initialise for language `eng`"
+        );
+        // Recognised text that is not valid UTF-8 is described, never
+        // quoted: the variant carries no payload at all.
+        assert_eq!(
+            OcrError::InvalidText.to_string(),
+            "Tesseract returned text that is not valid UTF-8"
+        );
+        // Invalid images are described by dimensions/format only
+        // (messages are built in `src/ocr/image.rs`).
+        assert_eq!(
+            OcrError::InvalidImage {
+                message: "expected 120000 bytes for 100x100 RGBA image, got 3".into()
+            }
+            .to_string(),
+            "invalid image: expected 120000 bytes for 100x100 RGBA image, got 3"
+        );
+
+        // Structural guarantee, checked by inspection of the enum:
+        // no OcrError variant has a field that any production call
+        // site fills with OCR output or image data — the fields are
+        // paths (`LibraryNotFound`, `LibraryLoad`, `TessdataNotFound`,
+        // `MissingTraineddata`, `InvalidPath`), language codes
+        // (`MissingTraineddata`, `InitialisationFailed`,
+        // `RecognitionFailed`), a C symbol name (`MissingSymbol`), a
+        // dimension-only message built in `src/ocr/image.rs`
+        // (`InvalidImage`), or nothing at all (`InvalidText`).
+        // Recognized text flows through `OcrPage`, which never touches
+        // an error value.
+    }
 }
