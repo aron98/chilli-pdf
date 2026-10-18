@@ -32,6 +32,19 @@ pub(crate) fn build_overlay_document(
     let mut doc = Document::load(input).map_err(|_| OverlayError::ReadFailed {
         path: input.to_owned(),
     })?;
+    // lopdf can "load" files whose cross-reference data is unusable by
+    // scanning the raw bytes for object headers and rebuilding the xref
+    // table from scratch (last-resort recovery). A document that needed
+    // that repair has no readable xref, and editing objects through a
+    // guessed table risks corrupting the file, so refuse it as
+    // unreadable. The reader records the xref's byte offset on load and
+    // only the recovery path leaves it at the default `0`: a real xref
+    // table never starts at byte 0, because the file header does.
+    if doc.xref_start == 0 {
+        return Err(OverlayError::ReadFailed {
+            path: input.to_owned(),
+        });
+    }
     if doc.trailer.has(b"Encrypt") {
         return Err(OverlayError::EncryptedUnsupported {
             path: input.to_owned(),

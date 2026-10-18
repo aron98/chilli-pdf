@@ -802,6 +802,40 @@ fn encrypted_input_is_refused() {
 }
 
 #[test]
+fn input_needing_xref_repair_is_refused_as_unreadable() {
+    // A startxref offset that points into the file header: lopdf can
+    // only "load" this by reconstructing the cross-reference table from
+    // raw bytes (last-resort recovery). The overlay refuses such files
+    // as unreadable instead of editing objects through a guessed xref.
+    let broken_xref = b"%PDF-1.4\n\
+        1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n\
+        2 0 obj\n<< /Type /Pages /Kids [] /Count 0 >>\nendobj\n\
+        xref\n0 1\n0000000000 65535 f\n\
+        trailer\n<< /Size 1 /Root 1 0 R >>\n\
+        startxref\n9\n\
+        %%EOF\n";
+    let input = tmp("broken_xref_input.pdf");
+    std::fs::write(&input, broken_xref).expect("write broken input");
+    let err = write_overlay(
+        &input,
+        &tmp("never.pdf"),
+        &[OverlayPage {
+            ocr: OcrPage::empty(1224, 1584, 144),
+            metadata: PageMetadata {
+                rotation: PageRotation::None,
+                crop_box: LETTER,
+            },
+        }],
+        &glyphless_font(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, chilli_pdf::overlay::OverlayError::ReadFailed { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
 fn page_count_must_match_the_document() {
     let two_pages = vec![
         OverlayPage {
