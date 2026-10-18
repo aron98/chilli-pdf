@@ -1,8 +1,9 @@
-# Architecture (planned)
+# Architecture
 
-Technical design chilli-pdf converges toward. Where a decision is still
-open, the corresponding issue drives a spike before committing. Nothing here
-is frozen until the v0.1.0 milestone closes.
+The technical design of chilli-pdf as implemented in v1.0.0. Early
+decisions were driven by spikes (recorded in `docs/spike-report.md`)
+and the corresponding issues; the sections below describe the shipped
+design.
 
 ## Stack
 

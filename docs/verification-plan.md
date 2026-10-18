@@ -4,7 +4,7 @@ Single source of truth for what has — and has not — been verified. This
 file is updated with every milestone. **No check is marked "passed" without
 being actually executed**, and limitations are stated explicitly.
 
-## Current status: core pipeline + GUI shell land; desktop-OS runtime checks pending
+## Current status: acceptance checks verified locally where possible; real-machine checks pending
 
 The repository contains a buildable, unit-tested project: the headless
 conversion pipeline and the eframe/egui shell are implemented, and
