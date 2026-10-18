@@ -30,13 +30,14 @@
 //! files into `assets/v1/`, regenerate the manifest, bump
 //! [`ASSET_VERSION`] — with no code changes.
 
+use std::env;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use dirs::{data_dir, data_local_dir};
+use dirs::home_dir;
 use include_dir::{Dir, include_dir};
 use sha2::{Digest, Sha256};
 
@@ -188,6 +189,60 @@ pub fn default_data_root(platform: Platform, home: &Path) -> PathBuf {
     }
 }
 
+/// Per-user data root for `platform`, honoring each OS convention's
+/// environment override exactly (see `docs/architecture.md`):
+///
+/// * **Windows** — `%LOCALAPPDATA%` when it holds an absolute path,
+///   otherwise the `<home>\AppData\Local` default.
+/// * **macOS** — `~/Library/Application Support`; the convention has no
+///   environment override, so one is never consulted.
+/// * **Linux** — `$XDG_DATA_HOME` when it holds an absolute path;
+///   relative values are invalid per the XDG Base Directory
+///   Specification and are ignored, otherwise `<home>/.local/share`.
+///
+/// Pure function: `env` is an injected lookup so every OS branch is
+/// unit-testable on any host.
+pub fn data_root_for(
+    platform: Platform,
+    home: &Path,
+    env: impl Fn(&str) -> Option<PathBuf>,
+) -> PathBuf {
+    let env_override = match platform {
+        Platform::Windows => env("LOCALAPPDATA").filter(|path| path.is_absolute()),
+        Platform::Macos => None,
+        Platform::Linux => env("XDG_DATA_HOME").filter(|path| path.is_absolute()),
+    };
+    env_override.unwrap_or_else(|| default_data_root(platform, home))
+}
+
+/// The per-user application directory (`<data root>/chilli-pdf`) for an
+/// explicit platform, home directory, and environment lookup.
+///
+/// Pure function — this is exactly how [`user_asset_base_dir`] resolves
+/// the host's directory, hoisted so the composition is unit-testable
+/// per OS on any host.
+pub fn user_asset_base_dir_from(
+    platform: Platform,
+    home: &Path,
+    env: impl Fn(&str) -> Option<PathBuf>,
+) -> PathBuf {
+    asset_base_dir(&data_root_for(platform, home, env))
+}
+
+/// The per-user base directory (`<data root>/chilli-pdf`) on this OS.
+///
+/// Resolution follows the OS conventions exactly (see [`data_root_for`]):
+/// `%LOCALAPPDATA%` on Windows so extraction never roams with the user,
+/// `~/Library/Application Support` on macOS, and `$XDG_DATA_HOME`
+/// (default `~/.local/share`) on Linux. Only the home directory comes
+/// from the `dirs` crate; the rest is pure, unit-tested logic.
+pub fn user_asset_base_dir() -> Result<PathBuf, AssetError> {
+    let home = home_dir().ok_or(AssetError::UnknownUserDataDir)?;
+    Ok(user_asset_base_dir_from(current_platform(), &home, |key| {
+        env::var_os(key).map(PathBuf::from)
+    }))
+}
+
 /// Application directory under an OS-provided per-user data root:
 /// `<root>/chilli-pdf`.
 pub fn asset_base_dir(data_root: &Path) -> PathBuf {
@@ -197,21 +252,6 @@ pub fn asset_base_dir(data_root: &Path) -> PathBuf {
 /// Versioned asset directory: `<base>/assets/v<version>/`.
 pub fn versioned_dir(base: &Path, version: &str) -> PathBuf {
     base.join("assets").join(format!("v{version}"))
-}
-
-/// The per-user base directory (`<data root>/chilli-pdf`) on this OS.
-///
-/// Windows uses the local (`%LOCALAPPDATA%`) root so extraction never
-/// roams with the user; macOS and Linux use the standard data root
-/// (`~/Library/Application Support` / XDG data home) via the `dirs` crate.
-pub fn user_asset_base_dir() -> Result<PathBuf, AssetError> {
-    let root = if cfg!(target_os = "windows") {
-        data_local_dir()
-    } else {
-        data_dir()
-    };
-    root.map(|root| asset_base_dir(&root))
-        .ok_or(AssetError::UnknownUserDataDir)
 }
 
 /// A single manifest entry: relative path, byte size, and SHA-256 digest.
@@ -900,6 +940,84 @@ mod tests {
             versioned_dir(&base, "42"),
             PathBuf::from("/data-root/chilli-pdf/assets/v42")
         );
+    }
+
+    // ---- per-OS data-root resolution (pure functions) ----
+
+    /// An environment-provided root that is absolute on whichever host
+    /// runs the tests: Windows drive paths are not absolute under Unix
+    /// and vice versa, and the overrides only accept absolute values.
+    fn absolute_env_root() -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(r"D:\CustomDataRoot")
+        } else {
+            PathBuf::from("/custom-data-root")
+        }
+    }
+
+    #[test]
+    fn windows_data_root_uses_localappdata_when_it_is_absolute() {
+        let home = Path::new("/users/anna");
+        let custom = absolute_env_root();
+        let env = |_: &str| Some(custom.clone());
+        assert_eq!(data_root_for(Platform::Windows, home, env), custom);
+    }
+
+    #[test]
+    fn windows_data_root_ignores_missing_or_relative_localappdata() {
+        let home = Path::new("/users/anna");
+        let expected = PathBuf::from("/users/anna/AppData/Local");
+        let missing = |_: &str| None;
+        assert_eq!(data_root_for(Platform::Windows, home, missing), expected);
+        let relative = |_: &str| Some(PathBuf::from("relative/junk"));
+        assert_eq!(data_root_for(Platform::Windows, home, relative), expected);
+    }
+
+    #[test]
+    fn linux_data_root_uses_xdg_data_home_when_it_is_absolute() {
+        let home = Path::new("/users/anna");
+        let custom = absolute_env_root();
+        let env = |_: &str| Some(custom.clone());
+        assert_eq!(data_root_for(Platform::Linux, home, env), custom);
+    }
+
+    #[test]
+    fn linux_data_root_ignores_missing_or_relative_xdg_data_home() {
+        // A relative $XDG_DATA_HOME is invalid per the XDG Base Directory
+        // Specification; the default must be used instead.
+        let home = Path::new("/users/anna");
+        let expected = PathBuf::from("/users/anna/.local/share");
+        let missing = |_: &str| None;
+        assert_eq!(data_root_for(Platform::Linux, home, missing), expected);
+        let relative = |_: &str| Some(PathBuf::from("relative/junk"));
+        assert_eq!(data_root_for(Platform::Linux, home, relative), expected);
+    }
+
+    #[test]
+    fn macos_data_root_has_no_environment_override() {
+        // The environment lookup always yields a value and macOS must
+        // still ignore it: the convention has no override.
+        let home = Path::new("/users/anna");
+        let env = |_: &str| Some(absolute_env_root());
+        assert_eq!(
+            data_root_for(Platform::Macos, home, env),
+            PathBuf::from("/users/anna/Library/Application Support")
+        );
+    }
+
+    #[test]
+    fn user_asset_base_dir_from_composes_root_and_app_dir_for_every_platform() {
+        let home = Path::new("/users/anna");
+        let no_env = |_: &str| None;
+        for (platform, root) in [
+            (Platform::Windows, "/users/anna/AppData/Local"),
+            (Platform::Macos, "/users/anna/Library/Application Support"),
+            (Platform::Linux, "/users/anna/.local/share"),
+        ] {
+            let base = user_asset_base_dir_from(platform, home, no_env);
+            assert_eq!(base, PathBuf::from(format!("{root}/{APP_DIR_NAME}")));
+            assert!(base.ends_with(APP_DIR_NAME));
+        }
     }
 
     #[test]

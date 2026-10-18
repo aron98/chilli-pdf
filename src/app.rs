@@ -6,7 +6,7 @@
 //! blocks: conversion runs on a worker thread and the frame loop only
 //! polls its channel, repainting whenever a message arrives.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -54,6 +54,88 @@ pub fn run(initial_input: Option<PathBuf>) -> Result<(), eframe::Error> {
             Ok(Box::new(GuiApp { state }))
         }),
     )
+}
+
+/// Everything a native file dialog needs, as pure data.
+///
+/// Opening a dialog requires a real desktop session, so that part cannot
+/// be covered headlessly — but *building the configuration* is pure and
+/// unit-tested below ([`input_dialog_spec`], [`output_dialog_spec`]);
+/// [`pick_file_dialog`] / [`save_file_dialog`] turn a spec into an
+/// `rfd::FileDialog` at the last possible moment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileDialogSpec {
+    /// Window title.
+    title: String,
+    /// Human-readable name of the file-type filter.
+    filter_name: String,
+    /// Filter extensions, without the leading dot.
+    filter_extensions: Vec<String>,
+    /// Pre-filled file name for save dialogs when it is valid Unicode.
+    ///
+    /// `None` for a non-Unicode name: `rfd` takes file names as `String`,
+    /// so a lossy conversion would mangle the suggestion — omitting it
+    /// leaves the original name untouched instead.
+    default_file_name: Option<String>,
+    /// Directory the dialog opens in, when one is known.
+    default_directory: Option<PathBuf>,
+}
+
+/// Configuration of the "choose the scanned PDF" input dialog.
+///
+/// No default directory or file name: the OS remembers the last-used
+/// location per application, which is what users expect for inputs.
+fn input_dialog_spec() -> FileDialogSpec {
+    FileDialogSpec {
+        title: "Choose the scanned PDF".to_owned(),
+        filter_name: "PDF document".to_owned(),
+        filter_extensions: vec!["pdf".to_owned()],
+        default_file_name: None,
+        default_directory: None,
+    }
+}
+
+/// Configuration of the "save the searchable PDF" dialog, pre-filled
+/// from the currently suggested `output` path (from
+/// `output_path::default_output_path`).
+fn output_dialog_spec(output: &Path) -> FileDialogSpec {
+    FileDialogSpec {
+        title: "Where should the searchable PDF be saved?".to_owned(),
+        filter_name: "PDF document".to_owned(),
+        filter_extensions: vec!["pdf".to_owned()],
+        default_file_name: output
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(str::to_owned),
+        default_directory: output
+            .parent()
+            .filter(|dir| !dir.as_os_str().is_empty())
+            .map(Path::to_path_buf),
+    }
+}
+
+/// Applies a [`FileDialogSpec`] to a fresh `rfd::FileDialog`.
+fn configure_dialog(dialog: rfd::FileDialog, spec: &FileDialogSpec) -> rfd::FileDialog {
+    let mut dialog = dialog
+        .add_filter(spec.filter_name.as_str(), &spec.filter_extensions)
+        .set_title(spec.title.as_str());
+    if let Some(directory) = &spec.default_directory {
+        dialog = dialog.set_directory(directory);
+    }
+    if let Some(name) = &spec.default_file_name {
+        dialog = dialog.set_file_name(name.clone());
+    }
+    dialog
+}
+
+/// Opens the modal "pick a file" dialog described by `spec`.
+fn pick_file_dialog(spec: &FileDialogSpec) -> Option<PathBuf> {
+    configure_dialog(rfd::FileDialog::new(), spec).pick_file()
+}
+
+/// Opens the modal "choose where to save" dialog described by `spec`.
+fn save_file_dialog(spec: &FileDialogSpec) -> Option<PathBuf> {
+    configure_dialog(rfd::FileDialog::new(), spec).save_file()
 }
 
 /// The egui application: a view over [`AppState`].
@@ -215,28 +297,89 @@ impl GuiApp {
     }
 
     fn pick_input(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("PDF document", &["pdf"])
-            .set_title("Choose the scanned PDF")
-            .pick_file()
-        {
+        if let Some(path) = pick_file_dialog(&input_dialog_spec()) {
             self.state.select_input(path);
         }
     }
 
     fn pick_output(&mut self) {
-        if self.state.output().is_none() {
+        let output = match self.state.output() {
+            Some(output) => output.to_path_buf(),
             // Nothing selected yet; the output is chosen with the input.
-            return;
-        }
-        let mut dialog = rfd::FileDialog::new()
-            .add_filter("PDF document", &["pdf"])
-            .set_title("Where should the searchable PDF be saved?");
-        if let Some(name) = self.state.output().and_then(|path| path.file_name()) {
-            dialog = dialog.set_file_name(name.to_string_lossy());
-        }
-        if let Some(path) = dialog.save_file() {
+            None => return,
+        };
+        if let Some(path) = save_file_dialog(&output_dialog_spec(&output)) {
             self.state.select_output(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_dialog_offers_only_pdf_files_without_any_prefill() {
+        let spec = input_dialog_spec();
+        assert_eq!(spec.title, "Choose the scanned PDF");
+        assert_eq!(spec.filter_name, "PDF document");
+        assert_eq!(spec.filter_extensions, ["pdf"]);
+        assert_eq!(spec.default_file_name, None);
+        assert_eq!(spec.default_directory, None);
+    }
+
+    #[test]
+    fn output_dialog_suggests_the_default_name_and_its_directory() {
+        let output = PathBuf::from("/scan/dir/Report_searchable.pdf");
+        let spec = output_dialog_spec(&output);
+        assert_eq!(spec.title, "Where should the searchable PDF be saved?");
+        assert_eq!(spec.filter_extensions, ["pdf"]);
+        assert_eq!(
+            spec.default_file_name.as_deref(),
+            Some("Report_searchable.pdf")
+        );
+        assert_eq!(
+            spec.default_directory.as_deref(),
+            Some(Path::new("/scan/dir"))
+        );
+    }
+
+    #[test]
+    fn output_dialog_without_a_parent_directory_opens_without_one() {
+        // A bare file name has `Some("")` as its parent; an empty path
+        // would point the dialog at the current directory, so it must
+        // be dropped instead.
+        let output = PathBuf::from("Report_searchable.pdf");
+        let spec = output_dialog_spec(&output);
+        assert_eq!(
+            spec.default_file_name.as_deref(),
+            Some("Report_searchable.pdf")
+        );
+        assert_eq!(spec.default_directory, None);
+    }
+
+    #[test]
+    fn output_dialog_passes_unicode_names_through_verbatim() {
+        let output = PathBuf::from("/scans/Chilli 🌶️_searchable.pdf");
+        let spec = output_dialog_spec(&output);
+        assert_eq!(
+            spec.default_file_name.as_deref(),
+            Some("Chilli 🌶️_searchable.pdf")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn output_dialog_omits_non_unicode_names_instead_of_mangling_them() {
+        // `rfd` takes the suggested name as a `String`; a lossy
+        // conversion would corrupt it. A name that is not valid Unicode
+        // must be omitted entirely, leaving the real file untouched.
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let output = PathBuf::from(OsStr::from_bytes(b"/scans/Bad_\xFF_name_searchable.pdf"));
+        let spec = output_dialog_spec(&output);
+        assert_eq!(spec.default_file_name, None);
+        assert_eq!(spec.default_directory.as_deref(), Some(Path::new("/scans")));
     }
 }

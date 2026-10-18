@@ -1210,10 +1210,15 @@ mod tests {
     #[test]
     fn lopdf_overlay_maps_unreadable_input_to_overlay_error() {
         let dir = scratch_dir("overlay-unreadable");
-        // `minimal_pdf` passes validation but its broken xref leaves lopdf
-        // with zero pages against the engine's one scripted OCR result, so
-        // the overlay fails with a typed, content-free error.
-        let input = write_input(&dir, &minimal_pdf());
+        // A file validation accepts (header and trailer markers, neither
+        // encrypted nor signed) but that contains no indirect objects at
+        // all: `lopdf`'s cross-reference recovery scans for `N 0 obj`
+        // markers, finds none, and `Document::load` fails — the genuinely
+        // unreadable input this test maps to `OverlayError::ReadFailed`.
+        // (`minimal_pdf` cannot play that role: its two catalog/pages
+        // objects let lopdf reconstruct a valid 0-page document, which
+        // instead trips the overlay's page-count check.)
+        let input = write_input(&dir, b"%PDF-1.4\nstartxref\n9\n%%EOF\n");
         let output = dir.join("searchable.pdf");
         let font = include_bytes!("../tests/fixtures/pdf.ttf");
 
@@ -1234,7 +1239,7 @@ mod tests {
         assert!(matches!(error, ConversionError::Overlay(_)));
         let message = error.user_message();
         assert!(
-            message.contains("page") && message.contains("0"),
+            message.contains("could not be read"),
             "the message should describe the failure, got: {message}"
         );
         assert!(
