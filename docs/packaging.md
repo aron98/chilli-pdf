@@ -105,6 +105,49 @@ from a pinned UB-Mannheim build (Windows), and producing static or
 relocated prebuilts in our own CI from pinned upstream source releases
 (Linux/macOS).
 
+### The placeholder guard (issue #42) — fail-closed by profile and by bytes
+
+v1.0.0 shipped a release binary whose Tesseract/Leptonica slots held
+the fixture placeholder bytes: manifest checksum verification passed
+because the placeholder checksums were themselves pinned. `build.rs`
+now refuses to let that happen again. The canonical placeholder
+definition is the committed fixture manifest (`assets/manifest.txt`):
+the six Tesseract/Leptonica entries there **are** the placeholder bytes
+by definition, so the guard stays correct automatically whenever the
+fixtures are regenerated. Guard semantics — no bypass, no escape-hatch
+environment variable:
+
+| Situation | Result |
+|-----------|--------|
+| fixture bundle + `cargo build --release` (any non-debug profile) | **hard build error** |
+| fixture bundle + debug profile (`cargo test`, `cargo clippy`, dev builds) | allowed as a clearly-labeled **DEGRADED build** with a loud `cargo:warning` |
+| `assets/real/` present + any Tesseract/Leptonica file byte-identical to a fixture placeholder | **hard build error, every profile** |
+
+Practical consequences:
+
+- `cargo test` keeps working offline from a fresh checkout, in fixture
+  mode — the whole unit suite is built on the placeholder blobs and
+  the DEGRADED warning states exactly what the binary contains.
+- `cargo build --release` **requires** `scripts/fetch-assets` to have
+  run first. The CI `build` job therefore builds the debug profile
+  (fixture mode); release-profile compile coverage lives in the `e2e`
+  CI job (real assets fetched at build time) and in the Release
+  workflow (which always fetches assets before building).
+- While the Tesseract/Leptonica pins are still placeholders (see the
+  section above), any release-profile build against a fetched overlay
+  fails: the fetch script copies the placeholder bytes for those two
+  slots, and the guard refuses them even in real-assets mode. That is
+  the guard doing its job — a release binary with placeholder engines
+  must never exist again. Real pins turn this green without any
+  further change.
+- A missing `PROFILE` variable or an unreadable/unparseable fixture
+  manifest is also a hard error: the guard fails closed on incomplete
+  data rather than silently skipping the check.
+
+`tests/build_guard.rs` pins the guard's data source: the fixture
+manifest must always list all six OCR library slots with well-formed
+SHA-256 values and placeholder-sized files.
+
 ## Re-pinning procedure
 
 1. Bump the pin values in `scripts/fetch-assets` (URLs + both SHA-256

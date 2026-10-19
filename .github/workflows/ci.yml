@@ -50,7 +50,13 @@ jobs:
       - name: Install Linux GUI system libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
-      - run: cargo build --release --locked
+      # Issue #42 fail-closed guard: this job checks out only the
+      # committed fixture bundle (placeholder Tesseract/Leptonica
+      # bytes), and `cargo build --release` now REFUSES to compile
+      # against placeholder assets. Build the debug profile here —
+      # release-profile compile coverage lives in the Release
+      # workflow, which always runs against fetched assets.
+      - run: cargo build --locked
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
 

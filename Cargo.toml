@@ -48,6 +48,15 @@ png = "0.18"
 # Exercising the PDF rendering backend in integration tests.
 pdfium-render = "0.9"
 
+# The build.rs placeholder guard (issue #42) hashes the OCR library slots
+# with the same crates as the runtime verifier, so the guard and src/assets.rs
+# can never disagree about what a placeholder is. Both crates are already
+# runtime dependencies, so adding them here does not change Cargo.lock
+# (the lock file does not record dependency kinds).
+[build-dependencies]
+sha2 = "0.11"
+hex = "0.4"
+
 [profile.release]
 lto = "thin"
 strip = "symbols"
