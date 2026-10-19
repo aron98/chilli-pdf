@@ -267,12 +267,12 @@ jobs:
             -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF \
             -DDISABLE_ARCHIVE=ON -DDISABLE_CURL=ON -DDISABLE_TIFF=ON
           cmake --build build-tess --config Release
-          test -f "build-tess/Release/tesseract.dll"
+          test -f "build-tess/bin/Release/tesseract.dll"
       - name: Stage the pair
         shell: bash
         run: |
           mkdir -p stage
-          cp "build-tess/Release/tesseract.dll" stage/tesseract.dll
+          cp "build-tess/bin/Release/tesseract.dll" stage/tesseract.dll
           cp "prefix/bin/leptonica.dll" stage/leptonica.dll
       # Fail-closed: tesseract.dll must import exactly "leptonica.dll" and
       # nothing outside the system DLL set; leptonica.dll must import
