@@ -13,6 +13,7 @@ until then — every bundled component added by an issue must land here.
 | Leptonica | image processing used by Tesseract | BSD 2-Clause |
 | Tesseract `eng.traineddata` | English language model | Apache License 2.0 |
 | Tesseract `hun.traineddata` | Hungarian language model | Apache License 2.0 |
+| Tesseract `pdf.ttf` glyphless font | invisible-text layer for searchable PDF output | Apache License 2.0 |
 | egui / eframe | native GUI toolkit | MIT OR Apache-2.0 |
 | rfd | native file dialogs | MIT OR Apache-2.0 |
 | Rust standard library and crates per `Cargo.lock` | toolchain and dependencies | MIT OR Apache-2.0 (crate-specific) |

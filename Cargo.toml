@@ -36,6 +36,11 @@ rfd = { version = "0.17", optional = true }
 # path resolved by `PdfiumLibrarySource` (the bundled-assets layer in
 # production; a dev-downloaded binary under gitignored `scratch/` in dev).
 pdfium-render = "0.9"
+# Object-level PDF editing for the invisible-text overlay (issue #13).
+# pdfium-render is a read/render API — it cannot add font objects or append
+# content streams — so the overlay writer edits the original document with
+# lopdf instead. Default features (chrono dates, rayon) are unused here.
+lopdf = { version = "0.45", default-features = false }
 
 [dev-dependencies]
 # Decoding the committed PNG test fixture in integration tests.
