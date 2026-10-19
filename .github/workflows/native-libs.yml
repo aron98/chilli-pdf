@@ -249,6 +249,7 @@ jobs:
         run: |
           cmake -S "src/leptonica-${LEPTONICA_VERSION}" -B build-lept \
             -DCMAKE_INSTALL_PREFIX="$PWD/prefix" \
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded \
             -DBUILD_SHARED_LIBS=ON -DBUILD_PROG=OFF -DSW_BUILD=OFF \
             -DENABLE_ZLIB=OFF -DENABLE_PNG=OFF -DENABLE_GIF=OFF \
