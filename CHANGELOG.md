@@ -6,6 +6,23 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-10-19
+
+Hotfix release for v1.0.1 upgraders: anyone who had run v1.0.0 on a
+machine hit a fail-closed startup error, because v1.0.1 changed the
+bundled asset bytes without changing the extraction layout version
+(issue #42 follow-up).
+
+### Fixed
+
+- Bumped the extraction layout version (`v1` → `v2`): v1.0.2 extracts
+  its real assets into a fresh directory instead of refusing the
+  v1.0.0-era files left in `v1` — upgrades work again with no manual
+  cleanup, and future asset changes bump the layout per its contract.
+- The fail-closed verification error is now actionable: it names the
+  stale extracted directory and the remedy (quit, delete the directory,
+  relaunch) instead of only suggesting corruption or tampering.
+
 ## [1.0.1] - 2026-10-19
 
 Hotfix release: v1.0.0 shipped with placeholder Tesseract/Leptonica

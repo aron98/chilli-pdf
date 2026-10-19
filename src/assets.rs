@@ -52,12 +52,19 @@ use sha2::{Digest, Sha256};
 /// Name of the per-user application directory under the OS data root.
 pub const APP_DIR_NAME: &str = "chilli-pdf";
 
-/// Version of the bundled asset set.
+/// Version of the bundled asset set's **extraction layout**.
 ///
 /// Bump this whenever any file in `assets/v1/` changes: extraction goes to
 /// a fresh `v<n>` directory and old versions are left untouched (the user
 /// may be running an older executable that still needs them).
-pub const ASSET_VERSION: &str = "1";
+///
+/// History: `v1` served the fixture bundle through v1.0.0 and, by
+/// oversight, also the real native libraries introduced in v1.0.1 —
+/// same directory name, different bytes. Upgraders from v1.0.0 then hit
+/// the fail-closed verifier on the stale fixture files (issue #42
+/// follow-up). `v2` is the first version of the real-asset layout; every
+/// future change to the bundled bytes must bump again.
+pub const ASSET_VERSION: &str = "2";
 
 /// The bundled asset set, embedded into the binary at compile time.
 ///
@@ -110,6 +117,15 @@ pub enum AssetError {
     },
     /// The target asset directory exists but is not a directory.
     NotADirectory(PathBuf),
+    /// An already-extracted asset directory failed verification. The most
+    /// common cause is an upgrade: an older executable extracted a
+    /// different asset generation under the same `v<n>` name.
+    StaleExtractionDir {
+        /// The on-disk directory that failed verification.
+        path: PathBuf,
+        /// The verification failure (checksum mismatch, missing file, …).
+        source: Box<AssetError>,
+    },
     /// Filesystem failure during extraction or verification.
     Io {
         /// Operation context, e.g. `"rename extraction dir"`.
@@ -156,6 +172,18 @@ impl fmt::Display for AssetError {
                 write!(
                     f,
                     "asset path `{}` exists but is not a directory",
+                    path.display()
+                )
+            }
+            Self::StaleExtractionDir { path, source } => {
+                write!(
+                    f,
+                    "the extracted asset directory `{}` failed verification: {source}. \
+                     This most often means an older chilli-pdf left its assets there \
+                     after an upgrade. Quit chilli-pdf, delete that directory, and \
+                     start again — the current version re-extracts its own verified \
+                     copies. If the failure persists, the files may be corrupted or \
+                     tampered with: reinstall chilli-pdf and report the problem",
                     path.display()
                 )
             }
@@ -566,8 +594,12 @@ pub fn glyphless_font_bytes() -> Result<Vec<u8>, AssetError> {
 /// * If `<base>/assets/v<version>/` already exists, its files are only
 ///   re-verified against the manifest (cheap, idempotent). Any mismatch is
 ///   an error — chilli-pdf fails closed instead of quietly re-extracting,
-///   because a corrupt *published* directory means disk corruption or
-///   tampering, and the user must hear about it.
+///   because a corrupt *published* directory means disk corruption,
+///   tampering, or (the common case) an older executable's asset
+///   generation left behind by an upgrade. The error says so and names
+///   the directory to delete ([`AssetError::StaleExtractionDir`]); the
+///   anti-tamper property that matters — never loading unverified bytes —
+///   is preserved.
 /// * Otherwise the bundle is written to a sibling temp directory, fully
 ///   verified, and atomically renamed into place. An interrupted run can
 ///   never publish a half-written directory.
@@ -579,7 +611,10 @@ pub fn ensure_extracted(base: &Path, version: &str) -> Result<ExtractedAssets, A
         if !final_dir.is_dir() {
             return Err(AssetError::NotADirectory(final_dir));
         }
-        verify_dir(&final_dir)?;
+        verify_dir(&final_dir).map_err(|source| AssetError::StaleExtractionDir {
+            path: final_dir.clone(),
+            source: Box::new(source),
+        })?;
         return Ok(ExtractedAssets { dir: final_dir });
     }
 
@@ -893,8 +928,19 @@ mod tests {
             verify_dir(assets.dir()),
             Err(AssetError::ChecksumMismatch { .. })
         ));
-        // Fail closed: ensure_extracted must refuse the corrupt directory.
-        assert!(ensure_extracted(&base, "1").is_err());
+        // Fail closed: ensure_extracted must refuse the corrupt directory,
+        // and the refusal must be the actionable stale-directory error
+        // carrying the underlying checksum mismatch.
+        match ensure_extracted(&base, "1") {
+            Err(AssetError::StaleExtractionDir { path, source }) => {
+                assert_eq!(path, assets.dir());
+                assert!(
+                    matches!(*source, AssetError::ChecksumMismatch { .. }),
+                    "inner error should be the checksum mismatch, got {source:?}"
+                );
+            }
+            other => panic!("expected StaleExtractionDir, got {other:?}"),
+        }
         fs::write(&victim, original).unwrap();
         verify_dir(assets.dir()).unwrap();
     }
@@ -909,6 +955,31 @@ mod tests {
             verify_dir(assets.dir()),
             Err(AssetError::MissingOnDisk(_))
         ));
+    }
+
+    #[test]
+    fn stale_extraction_dir_error_names_the_directory_and_remedy() {
+        // The v1.0.0 → v1.0.1 upgrade failure: an older generation's bytes
+        // sit in the extraction directory (same file names, different
+        // content). The user-facing error must say where and what to do.
+        let base = scratch_base("stale-upgrade");
+        let dir = versioned_dir(&base, "1");
+        fs::create_dir_all(dir.join("tessdata")).unwrap();
+        fs::write(dir.join("libleptonica.so"), b"old generation bytes").unwrap();
+        let err = ensure_extracted(&base, "1").unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains(&dir.display().to_string()),
+            "error must name the stale directory: {message}"
+        );
+        assert!(
+            message.contains("delete that directory"),
+            "error must state the remedy: {message}"
+        );
+        assert!(
+            message.contains("older chilli-pdf"),
+            "error must name the likely cause: {message}"
+        );
     }
 
     // ---- extraction: atomicity & idempotency ----

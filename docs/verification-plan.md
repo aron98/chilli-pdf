@@ -70,11 +70,11 @@ machine and is **not** claimed as done.
 | Launch release GUI build with **no console window**; `--version` via redirection | Windows 10/11 VM | run `chilli-pdf.exe --version > out.txt` (works) and launch normally (no console flash) |
 | File dialogs: PDF filter visible, Unicode paths, **network drives/UNC paths** | Windows 10/11 VM | pick/save a scan on a UNC path (`\\server\share\scan.pdf`) |
 | High-DPI: no tiny/blurred window at 150%–200% scaling | Windows 10/11 VM | change display scaling, relaunch, check window and text size |
-| Extraction lands in `%LOCALAPPDATA%\chilli-pdf\assets\v1\` | Windows 10/11 VM | first launch, inspect directory |
+| Extraction lands in `%LOCALAPPDATA%\chilli-pdf\assets\v2\` | Windows 10/11 VM | first launch, inspect directory |
 | Gatekeeper prompt for the unsigned binary; right-click → Open works; ad-hoc signature runs locally on arm64 | macOS (real Mac) | download/transfer binary (quarantined), first launch |
 | High-DPI on Retina (no tiny/blurred window) | macOS (real Mac) | launch on Retina display |
 | Dialogs (`NSOpenPanel`/`NSSavePanel`) incl. Unicode names | macOS (real Mac) | pick and save a scan |
-| Extraction lands in `~/Library/Application Support/chilli-pdf/assets/v1/` | macOS (real Mac) | first launch, inspect directory |
+| Extraction lands in `~/Library/Application Support/chilli-pdf/assets/v2/` | macOS (real Mac) | first launch, inspect directory |
 | egui window + GTK file dialogs on **X11** and on **Wayland** | Linux desktop, both sessions | run in each session; dialog opens, scale factor sane |
 | Full convert cycle end-to-end on each OS | all three | see acceptance checks 1–6 above |
 
