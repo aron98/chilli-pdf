@@ -55,3 +55,58 @@ for ln, b in zip(lines, boxes):
 img.save("tests/fixtures/hungarian_ou.png", dpi=(300, 300), optimize=True)
 PY
 ```
+
+## The `gen_*.pdf` synthetic scan fixtures
+
+Five small scanned-style PDFs generated **in pure Rust** by
+`tests/fixtures_gen.rs` (issue #18). They exist so the pipeline integration
+tests (`tests/integration.rs`) can exercise the real conversion path —
+validation, rendering seams, invisible overlay merge, transactional publish —
+without Python, Pillow, Tesseract, or any system OCR library.
+
+| Fixture | Shape |
+| --- | --- |
+| `gen_eng.pdf` | 1 letter image page (scan-like pattern) |
+| `gen_hun.pdf` | 1 letter image page (ragged text-like pattern) |
+| `gen_hybrid.pdf` | page 1 = real Helvetica text layer, page 2 = image page |
+| `gen_rotated.pdf` | 1 landscape page (`[0 0 792 612]`) tagged `/Rotate 90` |
+| `gen_multi.pdf` | 5 letter image pages sharing one image XObject |
+
+Notes on the design:
+
+* Every page is "scanned-style": a tiny deterministic 64×64 8-bit grayscale
+  image XObject, uncompressed, with no timestamps anywhere, so regeneration
+  is byte-for-byte reproducible.
+* The Hungarian `ő`/`ű` coverage lives in the *scripted OCR results* the
+  integration tests feed through the pipeline (the fixtures are images, not
+  text) — the round trip is exercised end to end and asserted on the decoded
+  overlay content stream.
+* The tests never embed real document text; every string asserted on is a
+  synthetic fixture-owned word defined alongside the tests.
+
+Regenerate after editing the generators in `tests/fixtures_gen.rs`:
+
+```sh
+CHILLI_REGEN_FIXTURES=1 cargo test --test fixtures_gen
+```
+
+With the variable unset (the default, and how CI runs), the same test only
+verifies that the committed files are byte-identical to what the generator
+produces — so a hand-edited or stale fixture fails loudly instead of
+mysteriously breaking the integration tests.
+
+Each fixture is well under 100 KB and the whole set stays under 2 MB, keeping
+checkouts and CI fast.
+
+## The `*_scan.pdf` fixtures and `make_fixtures.py`
+
+`eng_scan.pdf`, `hun_scan.pdf`, `rotated_scan.pdf`, `cropbox_scan.pdf`, and
+`encrypted_scan.pdf` were produced by `make_fixtures.py` (Python + Pillow +
+pikepdf) during the overlay work (issue #13) and carry PIL-derived
+ground-truth word tables hardcoded in `tests/overlay.rs`. **Do not
+regenerate or hand-edit them** — that would invalidate those tables.
+`make_fixtures.py` remains a dev-time spike tool; nothing in the test suite
+depends on Python. `encrypted_scan.pdf` is a real password-protected PDF,
+which `tests/integration.rs` reuses as the pipeline-level encrypted-input
+negative case.
+

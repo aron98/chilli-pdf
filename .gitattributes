@@ -9,3 +9,10 @@ assets/** -text
 *.dylib binary
 *.dll binary
 *.traineddata binary
+
+# Test fixture PDFs are parsed by lopdf and byte-compared in tests. Small
+# hand-built fixtures contain no early NUL bytes, so git's binary
+# auto-detection can miss them and CRLF-convert them on Windows checkout,
+# corrupting xref offsets. Keep every fixture byte-identical everywhere.
+tests/fixtures/** -text
+*.pdf binary

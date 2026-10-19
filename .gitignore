@@ -10,6 +10,11 @@
 # dropped in later — data-only) and assets/manifest.txt is the generated
 # SHA-256 manifest both the build and the tests depend on.
 
+# Fetched real-asset overlay (issue #19): scripts/fetch-assets downloads
+# the pinned multi-megabyte libraries and models here; they are embedded
+# into release binaries at build time and never committed.
+/assets/real
+
 # Local experiments and scratch output
 /scratch
 *.log

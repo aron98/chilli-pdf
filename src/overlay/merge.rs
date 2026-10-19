@@ -18,6 +18,34 @@ use super::layout;
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use std::path::Path;
 
+/// Load the original PDF for merging, refusing encrypted inputs (object
+/// editing of encrypted documents is unsupported) and inputs that needed
+/// cross-reference repair (see below).
+fn load_for_merge(input: &Path) -> Result<Document, OverlayError> {
+    let doc = Document::load(input).map_err(|_| OverlayError::ReadFailed {
+        path: input.to_owned(),
+    })?;
+    // lopdf can "load" files whose cross-reference data is unusable by
+    // scanning the raw bytes for object headers and rebuilding the xref
+    // table from scratch (last-resort recovery). A document that needed
+    // that repair has no readable xref, and editing objects through a
+    // guessed table risks corrupting the file, so refuse it as
+    // unreadable. The reader records the xref's byte offset on load and
+    // only the recovery path leaves it at the default `0`: a real xref
+    // table never starts at byte 0, because the file header does.
+    if doc.xref_start == 0 {
+        return Err(OverlayError::ReadFailed {
+            path: input.to_owned(),
+        });
+    }
+    if doc.trailer.has(b"Encrypt") {
+        return Err(OverlayError::EncryptedUnsupported {
+            path: input.to_owned(),
+        });
+    }
+    Ok(doc)
+}
+
 /// Load the PDF at `input` and attach `pages`' invisible-text overlays to
 /// it in memory; the returned document is not yet saved.
 ///
@@ -29,14 +57,7 @@ pub(crate) fn build_overlay_document(
     pages: &[OverlayPage],
     font_bytes: &[u8],
 ) -> Result<Document, OverlayError> {
-    let mut doc = Document::load(input).map_err(|_| OverlayError::ReadFailed {
-        path: input.to_owned(),
-    })?;
-    if doc.trailer.has(b"Encrypt") {
-        return Err(OverlayError::EncryptedUnsupported {
-            path: input.to_owned(),
-        });
-    }
+    let mut doc = load_for_merge(input)?;
 
     let page_ids = doc.get_pages();
     if page_ids.len() != pages.len() {
@@ -53,6 +74,52 @@ pub(crate) fn build_overlay_document(
     // `get_pages` numbers pages 1-based in document order; zip pairs the
     // i-th page object with the caller's i-th OCR result.
     for (index, (page_id, overlay_page)) in page_ids.values().zip(pages.iter()).enumerate() {
+        let words = layout::layout_page(&overlay_page.ocr, &overlay_page.metadata, index)?;
+        if words.is_empty() {
+            continue; // Nothing recognised: leave the page untouched.
+        }
+        let ops = content::overlay_ops(&words);
+        let overlay_stream_id = doc.add_object(Stream::new(Dictionary::new(), ops));
+        attach_overlay(&mut doc, *page_id, overlay_stream_id, font.type0, index)?;
+    }
+
+    Ok(doc)
+}
+
+/// Sparse counterpart of [`build_overlay_document`] for callers that hold
+/// OCR results for only some of the document's pages.
+///
+/// The conversion pipeline skips pages that are already searchable, so it
+/// collects results for a subset of pages; pairing a short list
+/// positionally (as the full-list form does) would misalign or reject
+/// such documents. Each entry here pairs a zero-based page index with
+/// its OCR result; pages without an entry are left untouched.
+pub(crate) fn build_overlay_indexed_document(
+    input: &Path,
+    pages: &[(usize, OverlayPage)],
+    font_bytes: &[u8],
+) -> Result<Document, OverlayError> {
+    let mut doc = load_for_merge(input)?;
+
+    let page_ids = doc.get_pages();
+    for (page, _) in pages {
+        if *page >= page_ids.len() {
+            return Err(OverlayError::PageIndexOutOfRange {
+                page: *page,
+                in_document: page_ids.len(),
+            });
+        }
+    }
+
+    // One font object set per document, shared by every page.
+    let font = font::add_glyphless_font(&mut doc, font_bytes)?;
+
+    // `get_pages` numbers pages 1-based in document order; each entry is
+    // placed on the page object at its own zero-based index.
+    for (index, page_id) in page_ids.values().enumerate() {
+        let Some((_, overlay_page)) = pages.iter().find(|(page, _)| *page == index) else {
+            continue; // No OCR result for this page: leave it untouched.
+        };
         let words = layout::layout_page(&overlay_page.ocr, &overlay_page.metadata, index)?;
         if words.is_empty() {
             continue; // Nothing recognised: leave the page untouched.

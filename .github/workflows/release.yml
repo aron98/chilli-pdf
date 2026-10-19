@@ -1,9 +1,15 @@
 name: Release
 
-# Builds per-OS release artifacts for version tags (v*).
-# Bundling of native libraries and OCR models is milestone work; until
-# then this workflow ships the raw binary so packaging end-to-end is proven.
-# Tag pushes are restricted by the repository's tag-protection ruleset.
+# Builds portable per-OS release artifacts for version tags (v*): each
+# archive carries the app binary, the third-party notices, a short
+# offline-usage README, and unpacks ready to run on a machine with no
+# dev tools, no OCR libraries, and no network (issue #19).
+#
+# Every OS job runs the pinned, checksum-verifying `scripts/fetch-assets`
+# step first. That step is PACKAGING-TIME network use only — the app
+# itself never touches the network; the fetched assets are embedded into
+# the binary at build time. Tag pushes are restricted by the
+# repository's tag-protection ruleset.
 
 on:
   push:
@@ -26,33 +32,52 @@ jobs:
             artifact: chilli-pdf-windows-x64
             binary: chilli-pdf.exe
             archive: zip
+            fetch_platform: windows64
           - os: macos-latest
             artifact: chilli-pdf-macos
             binary: chilli-pdf
             archive: tar.gz
+            fetch_platform: macos
           - os: ubuntu-latest
             artifact: chilli-pdf-linux-x64
             binary: chilli-pdf
             archive: tar.gz
+            fetch_platform: linux64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # Linux needs GTK 3 development files to build the native window
+      # shell (eframe/egui + rfd), same as CI. macOS and Windows need
+      # nothing extra.
+      - name: Install Linux GUI system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev
+      # Issue #19: embed the pinned, checksum-verified real asset set
+      # (PDFium, Tesseract, Leptonica, traineddata, glyphless font) for
+      # exactly this platform. Gitignored; never committed.
+      - name: Fetch pinned real bundled assets
+        shell: bash
+        run: scripts/fetch-assets --platform ${{ matrix.fetch_platform }}
       - run: cargo build --release --locked
+      # Headless launch check: --version prints and exits before any GUI
+      # or asset work, so this proves the artifact runs on the runner.
+      - name: Smoke-check the binary launches
+        run: ./target/release/${{ matrix.binary }} --version
       - name: Package
         shell: bash
         run: |
           mkdir -p "dist/${{ matrix.artifact }}"
           cp "target/release/${{ matrix.binary }}" "dist/${{ matrix.artifact }}/"
-          cp LICENSE THIRD_PARTY_NOTICES.md README.md "dist/${{ matrix.artifact }}/"
+          cp LICENSE THIRD_PARTY_NOTICES.md "dist/${{ matrix.artifact }}/"
+          cp packaging/README.txt "dist/${{ matrix.artifact }}/README.txt"
           cd dist
           if [ "${{ matrix.archive }}" = "zip" ]; then
             7z a "${{ matrix.artifact }}.zip" "${{ matrix.artifact }}"
           else
             tar -czf "${{ matrix.artifact }}.tar.gz" "${{ matrix.artifact }}"
           fi
-          sha256sum "${{ matrix.artifact }}".* > "${{ matrix.artifact }}.SHA256SUMS"
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
@@ -66,6 +91,13 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      # One SHA256SUMS across every per-OS archive, published next to
+      # them (issue #19 acceptance).
+      - name: Generate SHA256SUMS
+        run: |
+          cd dist
+          sha256sum chilli-pdf-* > SHA256SUMS
+          cat SHA256SUMS
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v3
         with:

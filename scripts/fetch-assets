@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+#
+# Fetch the pinned, real bundled assets for one platform (issue #19).
+#
+# Downloads the exact upstream artifacts named in the pin table below,
+# verifies EVERY download against its pinned SHA-256 (fail-closed: a
+# mismatched byte is a hard error, the overlay is never partially
+# populated), and lays the platform's asset set out in the gitignored
+# `assets/real/v1/` overlay. The next build embeds that overlay instead
+# of the committed fixture bundle (see build.rs and docs/packaging.md).
+#
+# This is a PACKAGING-TIME step: it runs on the machine that builds a
+# release, never on the machine that runs chilli-pdf — the app itself
+# never touches the network. Development without this script (and
+# without a network) keeps working on the committed fixtures.
+#
+# Usage:
+#   scripts/fetch-assets [--platform linux64|macos|windows64]
+#
+# `--platform` defaults to the machine running the script. `macos` pins
+# the arm64 (Apple Silicon) artifacts because that is what the release
+# workflow builds on; see docs/packaging.md before changing that.
+#
+# Tesseract and Leptonica native libraries are PLACEHOLDER pins: the
+# committed fixture bytes are copied in with a loud warning, because no
+# canonical portable prebuilt source exists for them (yet). See
+# docs/packaging.md § "Tesseract & Leptonica native libraries" and the
+# issue #19 notes before shipping a release that claims real OCR libs.
+
+set -euo pipefail
+
+# ---------------------------------------------------------------------------
+# Pin table (issue #19). Bump pins here and only here; see
+# docs/packaging.md for the re-pinning procedure.
+# ---------------------------------------------------------------------------
+
+# PDFium — bblanchon/pdfium-binaries, release tag `chromium/8100`
+# (PDFium 157.0.8100.0, published 2026-10-12).
+PDFIUM_TAG="chromium/8100"
+PDFIUM_BASE_URL="https://github.com/bblanchon/pdfium-binaries/releases/download/${PDFIUM_TAG}"
+
+# Tesseract models — tesseract-ocr/tessdata_fast @ main (2024-08-01).
+# `fast` variants: best speed/size trade-off for the OCR-while-typing use
+# case (see docs/packaging.md).
+TESSDATA_COMMIT="87416418657359cb625c412a48b6e1d6d41c29bd"
+TESSDATA_BASE_URL="https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/${TESSDATA_COMMIT}"
+TESSDATA_ENG_SHA256="7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+TESSDATA_HUN_SHA256="35067e7cfe102dcdc953f9a758fdfaa6296b17a1ee6d874ee780fa306430b9fb"
+
+# Per-platform PDFium pins: archive name, archive SHA-256, path of the
+# library inside the archive, and the bundled file name it becomes.
+PDFIUM_LINUX_ARCHIVE="pdfium-linux-x64.tgz"
+PDFIUM_LINUX_ARCHIVE_SHA256="1c1894a12d4d96ee01400c3874444126254180c5c7d2ab628576b67f8120320a"
+PDFIUM_LINUX_INNER="lib/libpdfium.so"
+PDFIUM_LINUX_OUT="libpdfium.so"
+PDFIUM_LINUX_LIB_SHA256="b8784cbd652ad2993332b7695e2c80f3a797f877fc47d9be97b66bca9639539e"
+
+PDFIUM_MACOS_ARCHIVE="pdfium-mac-arm64.tgz"
+PDFIUM_MACOS_ARCHIVE_SHA256="7ea647c7a7a9c1169be3f947000bc071ece2fade2cd6bd7e401e3675c6560cce"
+PDFIUM_MACOS_INNER="lib/libpdfium.dylib"
+PDFIUM_MACOS_OUT="libpdfium.dylib"
+PDFIUM_MACOS_LIB_SHA256="38d2326d9bfa8ed935bcd757348244d96e1ea4b0e274d3ee789c5b922726e350"
+
+PDFIUM_WINDOWS_ARCHIVE="pdfium-win-x64.tgz"
+PDFIUM_WINDOWS_ARCHIVE_SHA256="51621bcc1d9be9ea448f4b84b0516862b928e3968d3fca899af1a6d6e2848d6d"
+PDFIUM_WINDOWS_INNER="bin/pdfium.dll"
+PDFIUM_WINDOWS_OUT="pdfium.dll"
+PDFIUM_WINDOWS_LIB_SHA256="ae913f407e8d3f5cdbf08a9869564d647b13e132e01eb376c0a5a33b7a227a45"
+
+# Glyphless font: the repository commits the exact production font
+# (tests/fixtures/pdf.ttf, provenance /usr/share/tesseract-ocr/5/tessdata/
+# pdf.ttf), so it is copied rather than downloaded.
+
+# Tesseract & Leptonica native libraries: PLACEHOLDER pins (see header).
+# The committed fixtures under assets/v1/ are copied into the overlay.
+
+# ---------------------------------------------------------------------------
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OVERLAY="${ROOT}/assets/real/v1"
+
+usage() {
+  cat <<'USAGE'
+Fetch the pinned, real bundled assets for one platform (issue #19).
+
+Downloads the exact upstream artifacts named in the script's pin table,
+verifies every download against its pinned SHA-256 (fail-closed), and
+lays the platform's asset set out in the gitignored assets/real/v1/
+overlay, which the next build embeds instead of the fixture bundle.
+
+This is a PACKAGING-TIME step: it runs on the machine that builds a
+release, never on the machine that runs chilli-pdf (the app never
+touches the network).
+
+Usage:
+  scripts/fetch-assets [--platform linux64|macos|windows64]
+
+--platform defaults to the machine running the script; 'macos' pins the
+arm64 artifacts (that is what the release workflow builds on).
+
+Tesseract and Leptonica native libraries are PLACEHOLDER pins (fixture
+bytes with a loud warning): no canonical portable prebuilt source exists
+yet. See docs/packaging.md before shipping a release.
+USAGE
+}
+
+die() {
+  echo "fetch-assets: ERROR: $*" >&2
+  exit 1
+}
+
+note() {
+  echo "fetch-assets: $*"
+}
+
+# Portable SHA-256 (macOS has no sha256sum; its shasum speaks the same hex).
+sha256_hex() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+# Fail-closed checksum verification.
+verify_sha256() {
+  local file="$1" expected="$2" actual
+  actual="$(sha256_hex "$file")"
+  if [ "${actual}" != "${expected}" ]; then
+    die "SHA-256 mismatch for ${file}: expected ${expected}, got ${actual}."
+  fi
+}
+
+download() {
+  local url="$1" out="$2"
+  note "downloading ${url}"
+  curl -fsSL --retry 3 -o "${out}" "${url}" || die "download failed: ${url}"
+}
+
+detect_platform() {
+  case "$(uname -s)" in
+    Linux) echo "linux64" ;;
+    Darwin) echo "macos" ;;
+    MINGW* | MSYS* | CYGWIN*) echo "windows64" ;;
+    *) return 1 ;;
+  esac
+}
+
+platform=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --help | -h)
+      usage
+      exit 0
+      ;;
+    --platform)
+      [ $# -ge 2 ] || die "--platform requires a value (linux64|macos|windows64)"
+      case "$2" in
+        linux64 | macos | windows64) platform="$2" ;;
+        *) die "unknown platform '$2' (expected linux64|macos|windows64)" ;;
+      esac
+      shift 2
+      ;;
+    *)
+      die "unknown argument '$1' (expected --platform <linux64|macos|windows64>)"
+      ;;
+  esac
+done
+if [ -z "${platform}" ]; then
+  platform="$(detect_platform)" || die "cannot autodetect the platform; pass --platform <linux64|macos|windows64>"
+fi
+
+case "${platform}" in
+  linux64)
+    pdfium_archive="${PDFIUM_LINUX_ARCHIVE}"
+    pdfium_archive_sha256="${PDFIUM_LINUX_ARCHIVE_SHA256}"
+    pdfium_inner="${PDFIUM_LINUX_INNER}"
+    pdfium_out="${PDFIUM_LINUX_OUT}"
+    pdfium_lib_sha256="${PDFIUM_LINUX_LIB_SHA256}"
+    fixture_libs=("libtesseract.so" "libleptonica.so")
+    ;;
+  macos)
+    pdfium_archive="${PDFIUM_MACOS_ARCHIVE}"
+    pdfium_archive_sha256="${PDFIUM_MACOS_ARCHIVE_SHA256}"
+    pdfium_inner="${PDFIUM_MACOS_INNER}"
+    pdfium_out="${PDFIUM_MACOS_OUT}"
+    pdfium_lib_sha256="${PDFIUM_MACOS_LIB_SHA256}"
+    fixture_libs=("libtesseract.dylib" "libleptonica.dylib")
+    ;;
+  windows64)
+    pdfium_archive="${PDFIUM_WINDOWS_ARCHIVE}"
+    pdfium_archive_sha256="${PDFIUM_WINDOWS_ARCHIVE_SHA256}"
+    pdfium_inner="${PDFIUM_WINDOWS_INNER}"
+    pdfium_out="${PDFIUM_WINDOWS_OUT}"
+    pdfium_lib_sha256="${PDFIUM_WINDOWS_LIB_SHA256}"
+    fixture_libs=("tesseract.dll" "leptonica.dll")
+    ;;
+  *) die "unhandled platform '${platform}'" ;;
+esac
+
+# A fresh overlay keeps the bundle lean and platform-pure: leftovers of
+# an earlier fetch (or of another platform) must never leak into a build.
+rm -rf "${ROOT}/assets/real"
+mkdir -p "${OVERLAY}/tessdata"
+
+# --- PDFium: download the pinned archive, verify it, unpack, verify the
+# --- library inside it, and place it under its bundled name.
+workdir="$(mktemp -d)"
+trap 'rm -rf "${workdir}"' EXIT
+
+archive="${workdir}/${pdfium_archive}"
+download "${PDFIUM_BASE_URL}/${pdfium_archive}" "${archive}"
+verify_sha256 "${archive}" "${pdfium_archive_sha256}"
+
+tar -xzf "${archive}" -C "${workdir}"
+pdfium_lib="${workdir}/${pdfium_inner}"
+[ -f "${pdfium_lib}" ] || die "expected '${pdfium_inner}' inside the PDFium archive"
+verify_sha256 "${pdfium_lib}" "${pdfium_lib_sha256}"
+cp "${pdfium_lib}" "${OVERLAY}/${pdfium_out}"
+note "placed ${pdfium_out} ($(stat -c%s "${pdfium_lib}" 2>/dev/null || stat -f%z "${pdfium_lib}") bytes)"
+
+# --- Traineddata models: download and verify both pinned models.
+for model in eng hun; do
+  case "${model}" in
+    eng) expected="${TESSDATA_ENG_SHA256}" ;;
+    hun) expected="${TESSDATA_HUN_SHA256}" ;;
+  esac
+  out="${OVERLAY}/tessdata/${model}.traineddata"
+  download "${TESSDATA_BASE_URL}/${model}.traineddata" "${out}"
+  verify_sha256 "${out}" "${expected}"
+  note "placed tessdata/${model}.traineddata"
+done
+
+# --- Glyphless font: the committed production copy, not a download.
+cp "${ROOT}/tests/fixtures/pdf.ttf" "${OVERLAY}/pdf.ttf"
+note "placed pdf.ttf (the committed production glyphless font)"
+
+# --- Tesseract & Leptonica: PLACEHOLDER (fixture bytes). ---
+#
+# No canonical portable prebuilt source exists for these libraries yet
+# (Windows: UB-Mannheim installers only; Linux/macOS: no portable
+# official prebuilts). Until the placeholder is replaced with pinned
+# upstream prebuilts (docs/packaging.md § "Tesseract & Leptonica"), the
+# committed fixture blobs keep the manifest complete so builds, tests,
+# and the checksum pipeline stay honest about what would be embedded.
+for lib in "${fixture_libs[@]}"; do
+  cp "${ROOT}/assets/v1/${lib}" "${OVERLAY}/${lib}"
+done
+cat >&2 <<'PLACEHOLDER_NOTICE'
+fetch-assets: WARNING: Tesseract and Leptonica native libraries are
+  PLACEHOLDERS (fixture bytes, ~1-2 KB each). A release built from this
+  overlay CANNOT run real OCR. Replace the placeholder pins before
+  shipping; see docs/packaging.md and the issue #19 notes.
+PLACEHOLDER_NOTICE
+
+# --- Regenerate the overlay's manifest (one command, canonical format).
+note "regenerating assets/real/manifest.txt"
+(
+  cd "${ROOT}"
+  cargo run --example update_asset_manifest -- --dir assets/real/v1 --out assets/real/manifest.txt
+)
+
+note "done: real-asset overlay for '${platform}' is ready in assets/real/ (gitignored)."
+note "the next build embeds it (build.rs sets --cfg chilli_real_assets)."

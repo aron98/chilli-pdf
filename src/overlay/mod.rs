@@ -124,6 +124,27 @@ pub fn write_overlay_to(
         .map_err(|_| OverlayError::SerializeFailed)
 }
 
+/// Sparse, indexed form of [`write_overlay_to`] for callers that hold OCR
+/// results for only a subset of the document's pages.
+///
+/// The conversion pipeline skips pages that are already searchable, so it
+/// collects fewer results than the document has pages; pairing a short
+/// list positionally would misalign or reject such documents. Each entry
+/// pairs a zero-based page index with its OCR result; pages without an
+/// entry are left untouched. Behaviour for the pages that are supplied is
+/// identical to [`write_overlay_to`].
+pub(crate) fn write_overlay_indexed_to(
+    input: &Path,
+    pages: &[(usize, OverlayPage)],
+    font_bytes: &[u8],
+    mut sink: &mut dyn io::Write,
+) -> Result<(), OverlayError> {
+    let mut doc = merge::build_overlay_indexed_document(input, pages, font_bytes)?;
+    doc.save_to(&mut sink)
+        .map(|_| ())
+        .map_err(|_| OverlayError::SerializeFailed)
+}
+
 /// Compute the overlay content stream for a single page (wrapped in
 /// `q … Q`), without touching any file.
 ///

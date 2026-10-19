@@ -23,6 +23,13 @@ jobs:
       # minimal profile, so add the fmt component explicitly.
       - run: rustup toolchain install && rustup component add rustfmt
       - run: cargo fmt --check
+      # Issue #19: the pinned, checksum-verifying asset fetch step runs
+      # in the Release workflow; keep its argument handling and quoting
+      # under a shellcheck gate here.
+      - name: Lint the packaging script (shellcheck)
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q shellcheck
+          shellcheck scripts/fetch-assets
 
   build:
     name: build (${{ matrix.os }})
@@ -46,3 +53,36 @@ jobs:
       - run: cargo build --release --locked
       - run: cargo test --locked
       - run: cargo clippy --locked -- -D warnings
+
+  # Dependency gate for the offline promise (issue #20): adding a crate
+  # with network capability must fail CI. bans + licenses need no
+  # advisory database, so this job stays fast and network-light.
+  # Advisories are deliberately NOT checked here (their DB lives in a
+  # git repo fetched over the network) — see deny.toml and
+  # docs/privacy-audit.md for the rationale and the local full-audit
+  # procedure.
+  deny:
+    name: dependency gate (cargo-deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install
+      # Pinned binary release of cargo-deny (same version as verified
+      # locally; see docs/privacy-audit.md).
+      - name: Install cargo-deny 0.20.2 (pinned)
+        run: |
+          curl -sSfL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz \
+            | tar xz
+          sudo install -m 755 cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny /usr/local/bin/cargo-deny
+          cargo deny --version
+      # Feature-combo gate: tokio is allowed in the tree only without
+      # its net feature (mio/socket2 bans already block linking it;
+      # this check names the violation directly).
+      - name: Fail if tokio's net feature is ever enabled
+        run: |
+          if cargo tree --target all -e features | grep -q 'tokio feature "net"'; then
+            echo "::error::tokio's net feature is forbidden (runtime network access)"
+            exit 1
+          fi
+      - run: cargo deny check bans licenses

@@ -23,11 +23,19 @@
 //!   loading never depends on `PATH`, the current directory, or any other
 //!   system search path.
 //!
-//! The asset set lives in `assets/v1/` in the repository and is embedded via
-//! `include_dir!`; `assets/manifest.txt` is the generated manifest
-//! (`cargo run --example update_asset_manifest`). Swapping in the real
-//! PDFium/Tesseract binaries later is therefore **data-only** — drop the
-//! files into `assets/v1/`, regenerate the manifest, bump
+//! The asset set is embedded into the binary at compile time from one
+//! of two bundles, selected by `build.rs` (see `docs/packaging.md`):
+//!
+//! * the committed fixture bundle `assets/v1/` with its generated
+//!   `assets/manifest.txt` (the default; development needs no network),
+//! * or the fetched real bundle `assets/real/v1/` with
+//!   `assets/real/manifest.txt` (`--cfg chilli_real_assets`, issue #19):
+//!   the pinned, checksum-verified native libraries and models for
+//!   exactly one platform, downloaded by `scripts/fetch-assets` at
+//!   **packaging time** — the app itself never touches the network.
+//!
+//! Swapping or re-pinning assets is therefore **data-only** — drop the
+//! files into the bundle, regenerate the manifest, bump
 //! [`ASSET_VERSION`] — with no code changes.
 
 use std::env;
@@ -53,11 +61,28 @@ pub const ASSET_VERSION: &str = "1";
 
 /// The bundled asset set, embedded into the binary at compile time.
 ///
-/// The real native libraries and traineddata files are not available yet;
-/// `assets/v1/` currently holds byte-for-byte fixtures with the same names.
+/// **Fixture mode (default):** `assets/v1/` holds byte-for-byte fixtures
+/// with the real file names — every platform's set, tiny, committed —
+/// so development builds need no network.
+///
+/// **Real-assets mode (`chilli_real_assets`, issue #19):** `assets/real/v1/`
+/// holds the pinned native libraries and models fetched by
+/// `scripts/fetch-assets` for this one platform only (gitignored; never
+/// committed). `build.rs` switches this static between the two bundles.
+#[cfg(chilli_real_assets)]
+static BUNDLE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/real/v1");
+
+/// Fixture-bundle variant of [`BUNDLE`] (see there for the mode split).
+#[cfg(not(chilli_real_assets))]
 static BUNDLE: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/v1");
 
-/// The generated SHA-256 manifest of [`BUNDLE`].
+/// The generated SHA-256 manifest of [`BUNDLE`] for whichever bundle
+/// `build.rs` selected.
+#[cfg(chilli_real_assets)]
+const MANIFEST_TXT: &str = include_str!("../assets/real/manifest.txt");
+
+/// Fixture-bundle variant of [`MANIFEST_TXT`].
+#[cfg(not(chilli_real_assets))]
 const MANIFEST_TXT: &str = include_str!("../assets/manifest.txt");
 
 /// Prefix for extraction temp directories (never a valid asset directory).
@@ -487,6 +512,10 @@ pub enum NativeLib {
     Pdfium,
     /// Tesseract 5 — optical character recognition.
     Tesseract,
+    /// Leptonica — image processing Tesseract depends on (issue #19:
+    /// bundled like the others so the shipped app needs no system OCR
+    /// libraries).
+    Leptonica,
 }
 
 impl NativeLib {
@@ -499,6 +528,9 @@ impl NativeLib {
             (Self::Tesseract, Platform::Windows) => "tesseract.dll",
             (Self::Tesseract, Platform::Macos) => "libtesseract.dylib",
             (Self::Tesseract, Platform::Linux) => "libtesseract.so",
+            (Self::Leptonica, Platform::Windows) => "leptonica.dll",
+            (Self::Leptonica, Platform::Macos) => "libleptonica.dylib",
+            (Self::Leptonica, Platform::Linux) => "libleptonica.so",
         }
     }
 
@@ -506,6 +538,27 @@ impl NativeLib {
     pub fn platform_file_name(self) -> &'static str {
         self.file_name_for(current_platform())
     }
+}
+
+/// Name of the bundled glyphless TrueType font inside the asset bundle.
+///
+/// Issue #19: the invisible-text font moved from `tests/fixtures/pdf.ttf`
+/// into the bundled asset manifest, so the shipped binary verifies it
+/// like every other bundled file. Provenance: the glyphless font shipped
+/// with Tesseract (`/usr/share/tesseract-ocr/5/tessdata/pdf.ttf`).
+pub const GLYPHLESS_FONT_NAME: &str = "pdf.ttf";
+
+/// The verified bytes of the bundled glyphless font (see
+/// [`GLYPHLESS_FONT_NAME`]).
+///
+/// Fails closed like every other bundled asset: the bytes are checked
+/// against the manifest before they are handed out.
+pub fn glyphless_font_bytes() -> Result<Vec<u8>, AssetError> {
+    let file = BUNDLE
+        .get_file(GLYPHLESS_FONT_NAME)
+        .ok_or_else(|| AssetError::MissingFromBundle(GLYPHLESS_FONT_NAME.to_owned()))?;
+    verify_bytes(GLYPHLESS_FONT_NAME, file.contents())?;
+    Ok(file.contents().to_vec())
 }
 
 /// Ensure the asset set `version` is extracted under `base` and verified.
@@ -653,8 +706,39 @@ mod tests {
 
     #[test]
     fn embedded_manifest_parses_and_lists_every_expected_asset() {
+        // The full per-OS set every shipped build must bundle for the
+        // platform it targets (issue #19): one PDFium, one Tesseract,
+        // one Leptonica, both traineddata models, and the glyphless
+        // font. Valid in fixture mode and in real-assets mode.
         let manifest = manifest();
-        let names: Vec<&str> = manifest.entries().iter().map(|e| e.name.as_str()).collect();
+        let expected = [
+            NativeLib::Pdfium.platform_file_name(),
+            NativeLib::Tesseract.platform_file_name(),
+            NativeLib::Leptonica.platform_file_name(),
+            "tessdata/eng.traineddata",
+            "tessdata/hun.traineddata",
+            GLYPHLESS_FONT_NAME,
+        ];
+        for name in expected {
+            assert!(
+                manifest.entry(name).is_some(),
+                "manifest is missing `{name}`"
+            );
+            assert!(
+                BUNDLE.get_file(name).is_some(),
+                "bundle is missing `{name}` behind a manifest entry"
+            );
+        }
+    }
+
+    #[cfg(not(chilli_real_assets))]
+    #[test]
+    fn fixture_bundle_carries_all_three_platforms_sets() {
+        // The committed fixture bundle is platform-independent so the
+        // same offline dev build works everywhere: every OS's library
+        // names must be present (the per-OS sets of the real bundles
+        // are covered by the mode-switch tests below).
+        let manifest = manifest();
         for expected in [
             "pdfium.dll",
             "libpdfium.dylib",
@@ -662,14 +746,65 @@ mod tests {
             "tesseract.dll",
             "libtesseract.dylib",
             "libtesseract.so",
-            "tessdata/eng.traineddata",
-            "tessdata/hun.traineddata",
+            "leptonica.dll",
+            "libleptonica.dylib",
+            "libleptonica.so",
         ] {
+            assert!(manifest.entry(expected).is_some(), "missing `{expected}`");
+            assert!(BUNDLE.get_file(expected).is_some(), "missing `{expected}`");
+        }
+    }
+
+    #[cfg(chilli_real_assets)]
+    #[test]
+    fn real_bundle_is_current_platform_only() {
+        // The fetched real bundle (issue #19) is lean on purpose: it
+        // embeds exactly this platform's files and none of the others'.
+        let manifest = manifest();
+        let foreign: Vec<String> = [
+            NativeLib::Pdfium,
+            NativeLib::Tesseract,
+            NativeLib::Leptonica,
+        ]
+        .iter()
+        .flat_map(|lib| {
+            [Platform::Windows, Platform::Macos, Platform::Linux]
+                .into_iter()
+                .filter(|platform| *platform != current_platform())
+                .map(move |platform| lib.file_name_for(platform).to_owned())
+        })
+        .collect();
+        assert!(!foreign.is_empty());
+        for name in foreign {
             assert!(
-                names.contains(&expected),
-                "missing `{expected}` in {names:?}"
+                manifest.entry(&name).is_none(),
+                "foreign asset `{name}` must not be in the lean real bundle"
+            );
+            assert!(
+                BUNDLE.get_file(&name).is_none(),
+                "foreign asset `{name}` must not be embedded"
             );
         }
+    }
+
+    #[test]
+    fn glyphless_font_bytes_verify_and_match_the_production_font() {
+        let bytes = glyphless_font_bytes().unwrap();
+        // The bundled font is byte-identical to the production glyphless
+        // font in both modes: the fixture bundle commits the same file,
+        // and `scripts/fetch-assets` copies it into the real bundle.
+        assert_eq!(bytes, include_bytes!("../tests/fixtures/pdf.ttf"));
+        assert!(!bytes.is_empty());
+    }
+
+    #[test]
+    fn verify_bytes_rejects_truncated_asset() {
+        let name = NativeLib::Pdfium.platform_file_name();
+        let file = BUNDLE.get_file(name).unwrap();
+        assert!(matches!(
+            verify_bytes(name, &file.contents()[..10]),
+            Err(AssetError::ChecksumMismatch { .. })
+        ));
     }
 
     #[test]
@@ -743,15 +878,6 @@ mod tests {
     }
 
     #[test]
-    fn verify_bytes_rejects_truncated_asset() {
-        let file = BUNDLE.get_file("pdfium.dll").unwrap();
-        assert!(matches!(
-            verify_bytes("pdfium.dll", &file.contents()[..10]),
-            Err(AssetError::ChecksumMismatch { .. })
-        ));
-    }
-
-    #[test]
     fn verify_bytes_rejects_unknown_name() {
         assert!(verify_bytes("not-an-asset.bin", b"payload").is_err());
     }
@@ -777,7 +903,8 @@ mod tests {
     fn verify_dir_detects_missing_file() {
         let base = scratch_base("verify-missing");
         let assets = extracted_assets(&base, "1");
-        fs::remove_file(assets.dir().join("tesseract.dll")).unwrap();
+        let missing = NativeLib::Tesseract.platform_file_name();
+        fs::remove_file(assets.dir().join(missing)).unwrap();
         assert!(matches!(
             verify_dir(assets.dir()),
             Err(AssetError::MissingOnDisk(_))
@@ -793,8 +920,19 @@ mod tests {
         assert_eq!(assets.dir(), base.join("assets").join("v1"));
         verify_dir(assets.dir()).unwrap();
         // Spot-check that real content arrived, not just empty files.
-        let dll = fs::read(assets.dir().join("pdfium.dll")).unwrap();
-        assert!(dll.starts_with(b"MZ chilli-pdf fixture"));
+        let lib = fs::read(assets.dir().join(NativeLib::Pdfium.platform_file_name())).unwrap();
+        if cfg!(chilli_real_assets) {
+            // The fetched bundle holds the genuine native library, so
+            // the fixture marker bytes must NOT be there.
+            assert!(!lib.starts_with(b"chilli-pdf fixture"));
+            assert!(!lib.starts_with(b"MZ chilli-pdf fixture"));
+        } else {
+            // Fixture content: the marker line (the Windows fixture is
+            // "MZ"-prefixed, the other platforms' are not).
+            assert!(
+                lib.starts_with(b"MZ chilli-pdf fixture") || lib.starts_with(b"chilli-pdf fixture")
+            );
+        }
     }
 
     #[test]
@@ -1065,6 +1203,18 @@ mod tests {
             NativeLib::Tesseract.file_name_for(Platform::Linux),
             "libtesseract.so"
         );
+        assert_eq!(
+            NativeLib::Leptonica.file_name_for(Platform::Windows),
+            "leptonica.dll"
+        );
+        assert_eq!(
+            NativeLib::Leptonica.file_name_for(Platform::Macos),
+            "libleptonica.dylib"
+        );
+        assert_eq!(
+            NativeLib::Leptonica.file_name_for(Platform::Linux),
+            "libleptonica.so"
+        );
     }
 
     #[test]
@@ -1072,7 +1222,11 @@ mod tests {
         let base = scratch_base("library-paths");
         let assets = extracted_assets(&base, "1");
         let canonical_dir = assets.dir().canonicalize().unwrap();
-        for lib in [NativeLib::Pdfium, NativeLib::Tesseract] {
+        for lib in [
+            NativeLib::Pdfium,
+            NativeLib::Tesseract,
+            NativeLib::Leptonica,
+        ] {
             let path = assets.library_path(lib).unwrap();
             assert!(path.is_absolute(), "not absolute: {}", path.display());
             assert!(path.is_file(), "missing on disk: {}", path.display());

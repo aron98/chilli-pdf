@@ -1,8 +1,9 @@
-# Architecture (planned)
+# Architecture
 
-Technical design chilli-pdf converges toward. Where a decision is still
-open, the corresponding issue drives a spike before committing. Nothing here
-is frozen until the v0.1.0 milestone closes.
+The technical design of chilli-pdf as implemented in v1.0.0. Early
+decisions were driven by spikes (recorded in `docs/spike-report.md`)
+and the corresponding issues; the sections below describe the shipped
+design.
 
 ## Stack
 
@@ -51,13 +52,21 @@ the spike report records the trade-offs.
 
 ## Bundling & asset sandboxing
 
-- All native libraries, `eng.traineddata`, `hun.traineddata`, and license
-  notices are embedded in the binary (`include_dir!` over `assets/v1/`,
-  described by `assets/manifest.txt`).
+- All native libraries (PDFium, Tesseract, Leptonica), the
+  `eng.traineddata`/`hun.traineddata` models, the glyphless overlay font,
+  and license notices are embedded in the binary (`include_dir!` over a
+  bundle directory, described by its generated SHA-256 manifest).
+- There are two bundles (see `docs/packaging.md`): the committed fixture
+  bundle `assets/v1/` (tiny placeholder blobs for all platforms — the
+  default, so development needs no network), and the gitignored
+  real-asset overlay `assets/real/v1/` populated by the pinned,
+  checksum-verifying `scripts/fetch-assets` step (issue #19). `build.rs`
+  selects the overlay when it exists (`--cfg chilli_real_assets`).
 - Implementation lives in `src/assets.rs`; the layout and names below are
-  its API. Swapping in the real binaries later is **data-only**: drop the
-  files into `assets/v1/`, rerun
-  `cargo run --example update_asset_manifest`, and bump `ASSET_VERSION`.
+  its API. Re-pinning the real assets is **data-only**: update the pins in
+  `scripts/fetch-assets`, rerun it, bump `ASSET_VERSION` (and regenerate
+  `assets/manifest.txt` via `cargo run --example update_asset_manifest`
+  after any fixture change).
 - On first run assets are extracted to a **versioned per-user directory**:
   - Windows: `%LOCALAPPDATA%\chilli-pdf\assets\v<ASSET_VERSION>\`
   - macOS: `~/Library/Application Support/chilli-pdf/assets/v<ASSET_VERSION>/`
@@ -81,8 +90,11 @@ the spike report records the trade-offs.
   never mutates or deletes another version's files.
 - Libraries are loaded **only by absolute path** from the verified
   directory (`ExtractedAssets::library_path` for `NativeLib::Pdfium` /
-  `NativeLib::Tesseract`; Windows: `LoadLibraryExW` with
-  `LOAD_LIBRARY_SEARCH_*` flags; never the CWD, `PATH`, or any system
+  `NativeLib::Tesseract` / `NativeLib::Leptonica`; Leptonica is handed
+  to the loader before Tesseract, dependencies first, per the
+  `OcrPaths` contract in `src/ocr/paths.rs`; Windows:
+  `LoadLibraryExW` with `LOAD_LIBRARY_SEARCH_*` flags — see the known
+  gap in `docs/platform-notes.md`; never the CWD, `PATH`, or any system
   search path — a tampered library planted in a search path must never
   be picked up instead of the verified one).
 
