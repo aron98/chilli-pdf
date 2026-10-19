@@ -64,6 +64,11 @@ jobs:
     # verification run) and would break older end-user systems.
     runs-on: ubuntu-latest
     container: ubuntu:22.04
+    # Inside the container the default step shell is /bin/sh (dash), which
+    # does not support "set -o pipefail"; run every step with bash instead.
+    defaults:
+      run:
+        shell: bash
     steps:
       # The container runs as root; no sudo inside it.
       - name: Install build and relocation tooling
