@@ -124,7 +124,7 @@ issue #42; this section records the issue #19 state.)
 | Global `SHA256SUMS` over all per-OS archives attached to the release | GitHub Actions runners | download artifacts, re-check digests |
 | Release archive unpacks and runs with no dev tools, no OCR libs, no network | clean Windows/macOS/Linux machines | acceptance checks 1–6 above (issue #21) |
 
-## Issue #42: placeholder guard and bundled-asset acceptance
+## Issue #42: placeholder guard, bundled-asset acceptance, real-engine e2e
 
 ### ✅ Proven locally / by construction
 
@@ -161,6 +161,30 @@ This closes the evidence gap of the 2026-10-18 #21 run, where system
 Tesseract/Leptonica were substituted into the overlay (disclosed in
 `docs/verification-report.md`) — a substitution that can no longer
 pass unnoticed.
+
+### Real-engine e2e CI job (issue #42 item 2)
+
+`.github/workflows/ci.yml` runs an `e2e` job on the ubuntu/macos/windows
+matrix: `scripts/fetch-assets` (build-time network only — the shipped
+binary's runtime stays offline), `cargo build --release --locked` and
+`cargo run --release --locked --example e2e_convert`. The driver
+converts the committed `eng_scan.pdf` (English), `hun_scan.pdf`
+(Hungarian, `ő`/`ű`) and `rotated_scan.pdf` (`/Rotate 90`) through the
+production pipeline with in-Rust lopdf assertions: exact event streams,
+overlay text non-empty and in the right language, no U+FFFD/mojibake,
+boxes/rotation/original content streams preserved, fixture SHA-256
+before/after, no temp residue.
+
+Status: ⏳ **expected-red until the real Tesseract/Leptonica pins land**
+(tracked in the sibling branch). Until then `scripts/fetch-assets`
+copies the placeholder bytes for those two slots, the build guard
+refuses the release build on purpose, and the job fails. When the real
+pins merge, the job turns green with no change to the job definition.
+
+The CI `build` job now compiles the debug profile
+(`cargo build --locked`): release-profile compile coverage moved to the
+`e2e` job (which builds `--release` against fetched real assets) and to
+the Release workflow.
 
 ## Standing per-release checks
 
