@@ -55,6 +55,9 @@ pub enum OverlayError {
         /// The path that was attempted.
         path: PathBuf,
     },
+    /// Serializing the merged document to the output stream failed (the
+    /// caller-owned sink rejected the bytes, e.g. a full disk).
+    SerializeFailed,
 }
 
 impl fmt::Display for OverlayError {
@@ -103,6 +106,12 @@ impl fmt::Display for OverlayError {
             }
             Self::WriteFailed { path } => {
                 write!(f, "the PDF could not be written to {}", path.display())
+            }
+            Self::SerializeFailed => {
+                write!(
+                    f,
+                    "the searchable PDF could not be written to the output stream"
+                )
             }
         }
     }

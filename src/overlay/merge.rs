@@ -18,14 +18,17 @@ use super::layout;
 use lopdf::{Dictionary, Document, Object, ObjectId, Stream};
 use std::path::Path;
 
-/// Write `pages`' invisible-text overlays into the PDF at `input` and save
-/// the merged document to `output`.
-pub(crate) fn merge_overlay(
+/// Load the PDF at `input` and attach `pages`' invisible-text overlays to
+/// it in memory; the returned document is not yet saved.
+///
+/// Saving is left to the caller so the pipeline can stream the result to
+/// a sink (see [`super::write_overlay_to`]) or a path
+/// (see [`merge_overlay`]).
+pub(crate) fn build_overlay_document(
     input: &Path,
-    output: &Path,
     pages: &[OverlayPage],
     font_bytes: &[u8],
-) -> Result<(), OverlayError> {
+) -> Result<Document, OverlayError> {
     let mut doc = Document::load(input).map_err(|_| OverlayError::ReadFailed {
         path: input.to_owned(),
     })?;
@@ -59,6 +62,18 @@ pub(crate) fn merge_overlay(
         attach_overlay(&mut doc, *page_id, overlay_stream_id, font.type0, index)?;
     }
 
+    Ok(doc)
+}
+
+/// Write `pages`' invisible-text overlays into the PDF at `input` and save
+/// the merged document to `output`.
+pub(crate) fn merge_overlay(
+    input: &Path,
+    output: &Path,
+    pages: &[OverlayPage],
+    font_bytes: &[u8],
+) -> Result<(), OverlayError> {
+    let mut doc = build_overlay_document(input, pages, font_bytes)?;
     doc.save(output)
         .map(|_| ())
         .map_err(|_| OverlayError::WriteFailed {

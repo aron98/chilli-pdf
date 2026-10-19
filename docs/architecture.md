@@ -62,8 +62,11 @@ the spike report records the trade-offs.
   - Windows: `%LOCALAPPDATA%\chilli-pdf\assets\v<ASSET_VERSION>\`
   - macOS: `~/Library/Application Support/chilli-pdf/assets/v<ASSET_VERSION>/`
   - Linux: `$XDG_DATA_HOME/chilli-pdf/assets/v<ASSET_VERSION>/`
-  (base via the `dirs` crate: local data root on Windows, standard data
-  root elsewhere)
+  (the data root is resolved by the pure `data_root_for` helper in
+  `src/assets.rs`: home directory via the `dirs` crate plus each OS's
+  convention — `%LOCALAPPDATA%` override on Windows, `$XDG_DATA_HOME`
+  override, absolute values only, on Linux — so every branch is
+  unit-testable on any host)
 - A SHA-256 manifest is embedded with the assets (`AssetManifest`). Every
   file is verified on load: written temp files are checked before publish,
   an existing version directory is re-verified on every start, and a

@@ -8,6 +8,20 @@
 //! Without the `gui` feature the binary is a headless stub: display-less
 //! builds and CI compile and test the core logic without any GUI toolkit.
 
+// Release builds of the Windows GUI detach from the console so launching
+// the app never flashes a console window. Gated three ways:
+// Windows-only (other platforms have no console/GUI subsystem split),
+// GUI builds only (a `--no-default-features` headless build keeps the
+// console for CLI use), and debug builds excluded (`cargo test` and dev
+// runs on Windows keep console output). Note: with the console detached,
+// `--version`/`--help` still print correctly when stdout is redirected
+// (scripts, CI, `>` redirection) — they are just not shown in an
+// interactive console for a GUI-subsystem process.
+#![cfg_attr(
+    all(target_os = "windows", feature = "gui", not(debug_assertions)),
+    windows_subsystem = "windows"
+)]
+
 use chilli_pdf::VERSION;
 
 use std::process::ExitCode;

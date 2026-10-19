@@ -65,6 +65,7 @@ pub use error::OverlayError;
 
 use crate::ocr::OcrPage;
 use crate::pdf::PageMetadata;
+use std::io;
 use std::path::Path;
 
 /// One page's inputs to the overlay writer: the OCR result for that page
@@ -100,6 +101,27 @@ pub fn write_overlay(
     font_bytes: &[u8],
 ) -> Result<(), OverlayError> {
     merge::merge_overlay(input, output, pages, font_bytes)
+}
+
+/// Write an invisible-text overlay for every page of the PDF at `input`
+/// and serialize the merged, searchable document to `sink`.
+///
+/// The pipeline's transactional writer owns the destination, so it can
+/// stage the bytes in a temporary file and atomically rename them into
+/// place. `input` is only read.
+///
+/// Pages whose OCR result contains no drawable words are left untouched.
+/// Encrypted inputs are refused (see [`OverlayError::EncryptedUnsupported`]).
+pub fn write_overlay_to(
+    input: &Path,
+    pages: &[OverlayPage],
+    font_bytes: &[u8],
+    mut sink: &mut dyn io::Write,
+) -> Result<(), OverlayError> {
+    let mut doc = merge::build_overlay_document(input, pages, font_bytes)?;
+    doc.save_to(&mut sink)
+        .map(|_| ())
+        .map_err(|_| OverlayError::SerializeFailed)
 }
 
 /// Compute the overlay content stream for a single page (wrapped in
