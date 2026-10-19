@@ -1,0 +1,342 @@
+name: Native OCR prebuilts
+
+# Issue #42 (fix-plan item 1): builds the pinned Tesseract + Leptonica
+# native library pair for every release platform, from the pinned
+# upstream sources named below, as RELOCATABLE prebuilts:
+#
+#   linux64   libtesseract.so finds the sibling libleptonica.so via an
+#             $ORIGIN runpath (no absolute paths).
+#   macos     libtesseract.dylib references the sibling libleptonica.dylib
+#             via @loader_path (no absolute paths).
+#   windows64 tesseract.dll imports exactly "leptonica.dll" by name; the
+#             app's ffi layer preloads leptonica.dll first, so the import
+#             resolves from the already-loaded module (no loader
+#             search-path dependence).
+#
+# Why our own prebuilts (instead of shipping the de-facto-standard
+# UB-Mannheim Windows installer DLLs, as originally considered):
+#   * the installer is an NSIS executable (not Inno Setup, so innoextract
+#     cannot unpack it), and
+#   * it ships libtesseract-5.dll + libleptonica-6.dll (not
+#     tesseract.dll + leptonica.dll), and
+#   * those DLLs hard-import ~12 sibling DLLs (libarchive-13, libcurl-4,
+#     libstdc++-6, libgcc_s_seh-1, libwinpthread-1, and eight codec DLLs
+#     with their own transitive dependencies, ~46 MB in total) — bundling
+#     a network stack and crypto libraries into a privacy-focused offline
+#     app is unacceptable.
+# Building from the same pinned sources everywhere gives the app exactly
+# two self-contained OCR libraries per platform. See docs/packaging.md
+# for the full rationale and the re-pinning procedure.
+#
+# The built archives are attached (manually, by the maintainer) to a
+# dedicated GitHub release of this repository; scripts/fetch-assets then
+# pins those URLs + SHA-256 digests, exactly like the PDFium pins.
+#
+# This workflow is manually dispatched (workflow_dispatch) — it is a
+# PACKAGING-TIME step, run only when the OCR pins change, never as part
+# of the app's CI or release path.
+
+on:
+  workflow_dispatch:
+
+env:
+  # Upstream source pins (provenance of everything this workflow builds).
+  # Tesseract 5.5.3 (2026-07-24), tesseract-ocr/tesseract. The upstream
+  # releases carry no source tarball assets, so this is the auto-generated
+  # archive of the tagged commit.
+  TESSERACT_VERSION: "5.5.3"
+  TESSERACT_URL: "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.5.3.tar.gz"
+  TESSERACT_SHA256: "9218e62793116d42a9f6d14cd9348518b27f382096eea3d0f2d1a24616bb5884"
+  # Leptonica 1.87.0 (2025-12-24), DanBloomberg/leptonica, official
+  # release tarball (carries a pre-generated configure, though only the
+  # CMake build is used here).
+  LEPTONICA_VERSION: "1.87.0"
+  LEPTONICA_URL: "https://github.com/DanBloomberg/leptonica/releases/download/1.87.0/leptonica-1.87.0.tar.gz"
+  LEPTONICA_SHA256: "c73363397f96eb1295602bf44d708a994ad42046c791bf03ea0505d829bdb6a7"
+
+jobs:
+  linux64:
+    name: prebuilts (chilli-ocr-linux64)
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Install relocation tooling
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends patchelf
+      - name: Download and verify the pinned sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o leptonica.tar.gz "$LEPTONICA_URL"
+          echo "$LEPTONICA_SHA256  leptonica.tar.gz" | sha256sum -c -
+          curl -fsSL --retry 3 -o tesseract.tar.gz "$TESSERACT_URL"
+          echo "$TESSERACT_SHA256  tesseract.tar.gz" | sha256sum -c -
+          mkdir src && tar -xzf leptonica.tar.gz -C src && tar -xzf tesseract.tar.gz -C src
+          test -d "src/leptonica-${LEPTONICA_VERSION}"
+          test -d "src/tesseract-${TESSERACT_VERSION}"
+      # Leptonica: shared library, no codec dependencies at all. The app
+      # feeds raw decoded pixel buffers to Tesseract, so leptonica never
+      # needs to open an image file itself, and the bundled pair stays
+      # dependent on nothing but system libraries.
+      - name: Build Leptonica (no codecs)
+        run: |
+          cmake -S "src/leptonica-${LEPTONICA_VERSION}" -B build-lept -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/prefix" \
+            -DBUILD_SHARED_LIBS=ON -DBUILD_PROG=OFF -DSW_BUILD=OFF \
+            -DENABLE_ZLIB=OFF -DENABLE_PNG=OFF -DENABLE_GIF=OFF \
+            -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF -DENABLE_WEBP=OFF \
+            -DENABLE_OPENJPEG=OFF
+          cmake --build build-lept
+          cmake --install build-lept
+          test -f "prefix/lib/libleptonica.so.6.0.0"
+      # The bundled file must be exactly "libleptonica.so" and libtesseract
+      # must depend on that name, so the shipped pair resolves each other
+      # from any shared directory ($ORIGIN) with no absolute paths. Give
+      # the built library that SONAME BEFORE linking Tesseract against it.
+      - name: Relocate Leptonica (SONAME libleptonica.so)
+        run: |
+          patchelf --set-soname libleptonica.so "prefix/lib/libleptonica.so.6.0.0"
+          mkdir -p stage
+          cp "prefix/lib/libleptonica.so.6.0.0" "stage/libleptonica.so"
+      - name: Build Tesseract (no libarchive, no libcurl)
+        run: |
+          cmake -S "src/tesseract-${TESSERACT_VERSION}" -B build-tess -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PWD/prefix" \
+            -DBUILD_SHARED_LIBS=ON -DBUILD_TRAINING_TOOLS=OFF \
+            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF \
+            -DDISABLE_ARCHIVE=ON -DDISABLE_CURL=ON -DDISABLE_TIFF=ON
+          cmake --build build-tess
+      - name: Relocate Tesseract (runpath $ORIGIN)
+        run: |
+          cp "build-tess/libtesseract.so.5.5.3" "stage/libtesseract.so"
+          patchelf --set-rpath '$ORIGIN' "stage/libtesseract.so"
+      # Fail-closed: the shipped pair must be fully relocatable.
+      - name: Assert the pair is relocatable
+        run: |
+          set -euo pipefail
+          echo "== libtesseract.so dependencies =="
+          readelf -d "stage/libtesseract.so" | grep NEEDED
+          echo "== runpath =="
+          readelf -d "stage/libtesseract.so" | grep -E 'RPATH|RUNPATH'
+          readelf -d "stage/libtesseract.so" | grep -q 'Library soname: \[libtesseract'
+          readelf -d "stage/libtesseract.so" | grep -q '(NEEDED).*\[libleptonica.so\]'
+          readelf -d "stage/libtesseract.so" | grep -q '(RUNPATH).*\[\$ORIGIN\]'
+          # No absolute build-tree paths may leak into the pair.
+          ! readelf -d "stage/libtesseract.so" | grep -q '/home\|/tmp\|/root'
+          ! readelf -d "stage/libleptonica.so" | grep -q '/home\|/tmp\|/root'
+          # And the sibling must actually resolve from the same directory.
+          ldd "stage/libtesseract.so" | grep -q 'libleptonica.so => /'
+          ! ldd "stage/libtesseract.so" | grep -q 'not found'
+      - name: Package
+        run: |
+          tar -czf "chilli-ocr-linux64.tar.gz" -C stage .
+          tar -tzf "chilli-ocr-linux64.tar.gz"
+          sha256sum "chilli-ocr-linux64.tar.gz"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chilli-ocr-linux64
+          path: chilli-ocr-linux64.tar.gz
+
+  macos:
+    name: prebuilts (chilli-ocr-macos)
+    runs-on: macos-15
+    steps:
+      - name: Download and verify the pinned sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o leptonica.tar.gz "$LEPTONICA_URL"
+          echo "$LEPTONICA_SHA256  leptonica.tar.gz" | shasum -a 256 -c -
+          curl -fsSL --retry 3 -o tesseract.tar.gz "$TESSERACT_URL"
+          echo "$TESSERACT_SHA256  tesseract.tar.gz" | shasum -a 256 -c -
+          mkdir src && tar -xzf leptonica.tar.gz -C src && tar -xzf tesseract.tar.gz -C src
+          test -d "src/leptonica-${LEPTONICA_VERSION}"
+          test -d "src/tesseract-${TESSERACT_VERSION}"
+      - name: Build Leptonica (no codecs)
+        run: |
+          cmake -S "src/leptonica-${LEPTONICA_VERSION}" -B build-lept -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/prefix" \
+            -DBUILD_SHARED_LIBS=ON -DBUILD_PROG=OFF -DSW_BUILD=OFF \
+            -DENABLE_ZLIB=OFF -DENABLE_PNG=OFF -DENABLE_GIF=OFF \
+            -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF -DENABLE_WEBP=OFF \
+            -DENABLE_OPENJPEG=OFF
+          cmake --build build-lept
+          cmake --install build-lept
+          test -f "prefix/lib/libleptonica.6.0.0.dylib"
+      # The bundled pair must reference each other via @loader_path only,
+      # with no absolute paths. Give leptonica that install name BEFORE
+      # linking Tesseract against it (the linker copies it into
+      # libtesseract.dylib's load commands).
+      - name: Relocate Leptonica (install name @loader_path)
+        run: |
+          install_name_tool -id "@loader_path/libleptonica.dylib" \
+            "prefix/lib/libleptonica.6.0.0.dylib"
+          codesign --force --sign - "prefix/lib/libleptonica.6.0.0.dylib"
+          mkdir -p stage
+          cp "prefix/lib/libleptonica.6.0.0.dylib" "stage/libleptonica.dylib"
+      - name: Build Tesseract (no libarchive, no libcurl)
+        run: |
+          cmake -S "src/tesseract-${TESSERACT_VERSION}" -B build-tess -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$PWD/prefix" \
+            -DBUILD_SHARED_LIBS=ON -DBUILD_TRAINING_TOOLS=OFF \
+            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF \
+            -DDISABLE_ARCHIVE=ON -DDISABLE_CURL=ON -DDISABLE_TIFF=ON
+          cmake --build build-tess
+      - name: Relocate Tesseract
+        run: |
+          cp "build-tess/libtesseract.5.5.3.dylib" "stage/libtesseract.dylib"
+          codesign --force --sign - "stage/libtesseract.dylib"
+      # Fail-closed: only @loader_path + system libraries, no absolute
+      # build-tree paths.
+      - name: Assert the pair is relocatable
+        run: |
+          set -euo pipefail
+          echo "== libtesseract.dylib dependencies =="
+          otool -L "stage/libtesseract.dylib"
+          otool -L "stage/libtesseract.dylib" | grep -q '@loader_path/libleptonica.dylib'
+          ! otool -L "stage/libtesseract.dylib" | grep -q '/Users/\|/tmp/\|/private/'
+          codesign --verify --strict "stage/libtesseract.dylib"
+          codesign --verify --strict "stage/libleptonica.dylib"
+      - name: Package
+        run: |
+          tar -czf chilli-ocr-macos.tar.gz -C stage .
+          tar -tzf chilli-ocr-macos.tar.gz
+          shasum -a 256 chilli-ocr-macos.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chilli-ocr-macos
+          path: chilli-ocr-macos.tar.gz
+
+  windows64:
+    name: prebuilts (chilli-ocr-windows64)
+    runs-on: windows-latest
+    steps:
+      # The bundled names are exactly tesseract.dll + leptonica.dll, and —
+      # critically — tesseract.dll's PE import table must record exactly
+      # "leptonica.dll", because the app preloads leptonica.dll under that
+      # name and Windows resolves imports from the already-loaded module
+      # table before any path search. Upstream's CMake names its outputs
+      # "tesseract55.dll" and "leptonica-1.87.0.dll"; override the two
+      # OUTPUT_NAME properties so the linker bakes in the bundled names
+      # (renaming the files afterwards would NOT change the import name).
+      # The static CRT (MultiThreaded) keeps the pair free of
+      # vcruntime140.dll dependencies.
+      - name: Download and verify the pinned sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o leptonica.tar.gz "$LEPTONICA_URL"
+          echo "$LEPTONICA_SHA256  leptonica.tar.gz" | sha256sum -c -
+          curl -fsSL --retry 3 -o tesseract.tar.gz "$TESSERACT_URL"
+          echo "$TESSERACT_SHA256  tesseract.tar.gz" | sha256sum -c -
+          mkdir src && tar -xzf leptonica.tar.gz -C src && tar -xzf tesseract.tar.gz -C src
+          test -d "src/leptonica-${LEPTONICA_VERSION}"
+          test -d "src/tesseract-${TESSERACT_VERSION}"
+      - name: Override the DLL output names (import-name contract)
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed -i 's/"leptonica$<$<BOOL:${MSVC}>:-${PROJECT_VERSION}$<$<CONFIG:DEBUG>:d>>"/leptonica/' \
+            "src/leptonica-${LEPTONICA_VERSION}/src/CMakeLists.txt"
+          sed -i 's/tesseract$<$<BOOL:${WIN32}>:${VERSION_MAJOR}${VERSION_MINOR}$<$<CONFIG:DEBUG>:d>>/tesseract/' \
+            "src/tesseract-${TESSERACT_VERSION}/CMakeLists.txt"
+          grep -q '^    leptonica)' "src/leptonica-${LEPTONICA_VERSION}/src/CMakeLists.txt"
+          grep -q '^    tesseract$' "src/tesseract-${TESSERACT_VERSION}/CMakeLists.txt"
+      - name: Build Leptonica (no codecs, static CRT)
+        shell: bash
+        run: |
+          cmake -S "src/leptonica-${LEPTONICA_VERSION}" -B build-lept \
+            -DCMAKE_INSTALL_PREFIX="$PWD/prefix" \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded \
+            -DBUILD_SHARED_LIBS=ON -DBUILD_PROG=OFF -DSW_BUILD=OFF \
+            -DENABLE_ZLIB=OFF -DENABLE_PNG=OFF -DENABLE_GIF=OFF \
+            -DENABLE_JPEG=OFF -DENABLE_TIFF=OFF -DENABLE_WEBP=OFF \
+            -DENABLE_OPENJPEG=OFF
+          cmake --build build-lept --config Release
+          cmake --install build-lept --config Release
+          test -f "prefix/bin/leptonica.dll"
+      - name: Build Tesseract (no libarchive, no libcurl, static CRT)
+        shell: bash
+        run: |
+          cmake -S "src/tesseract-${TESSERACT_VERSION}" -B build-tess \
+            -DCMAKE_PREFIX_PATH="$PWD/prefix" \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded \
+            -DBUILD_SHARED_LIBS=ON -DBUILD_TRAINING_TOOLS=OFF \
+            -DGRAPHICS_DISABLED=ON -DOPENMP_BUILD=OFF \
+            -DDISABLE_ARCHIVE=ON -DDISABLE_CURL=ON -DDISABLE_TIFF=ON
+          cmake --build build-tess --config Release
+          test -f "build-tess/Release/tesseract.dll"
+      - name: Stage the pair
+        shell: bash
+        run: |
+          mkdir -p stage
+          cp "build-tess/Release/tesseract.dll" stage/tesseract.dll
+          cp "prefix/bin/leptonica.dll" stage/leptonica.dll
+      # Fail-closed: tesseract.dll must import exactly "leptonica.dll" and
+      # nothing outside the system DLL set; leptonica.dll must import
+      # nothing outside the system DLL set either.
+      - name: Assert the import tables
+        shell: python
+        run: |
+          import struct, sys
+
+          SYSTEM = {
+              "kernel32.dll", "user32.dll", "gdi32.dll", "msvcrt.dll",
+              "ws2_32.dll", "advapi32.dll", "shell32.dll", "ole32.dll",
+              "bcrypt.dll", "ntdll.dll",
+          }
+
+          def import_names(path):
+              with open(path, "rb") as fh:
+                  data = fh.read()
+              assert data[:2] == b"MZ", f"{path}: not a PE image"
+              pe_off = struct.unpack_from("<I", data, 0x3C)[0]
+              assert data[pe_off:pe_off + 4] == b"PE\0\0", f"{path}: bad PE header"
+              opt_off = pe_off + 24
+              magic = struct.unpack_from("<H", data, opt_off)[0]
+              assert magic == 0x20B, f"{path}: expected PE32+ (x64)"
+              data_dir_off = opt_off + 112  # PE32+ data directories
+              rva, _size = struct.unpack_from("<II", data, data_dir_off + 8)  # import table
+              assert rva, f"{path}: no import table"
+
+              def rva_to_off(rva):
+                  nsec = struct.unpack_from("<H", data, pe_off + 6)[0]
+                  opt_size = struct.unpack_from("<H", data, pe_off + 20)[0]
+                  sec_off = pe_off + 24 + opt_size
+                  for i in range(nsec):
+                      base = sec_off + i * 40
+                      vsize, vaddr, rsize, roff = struct.unpack_from("<IIII", data, base + 8)
+                      if vaddr <= rva < vaddr + max(vsize, rsize):
+                          return roff + (rva - vaddr)
+                  raise AssertionError(f"{path}: RVA {rva:#x} not in any section")
+
+              names = []
+              off = rva_to_off(rva)
+              while True:
+                  ilt, ts, fc, name_rva, iat = struct.unpack_from("<IIIII", data, off)
+                  if name_rva == 0:
+                      break
+                  end = data.index(b"\0", rva_to_off(name_rva))
+                  names.append(data[rva_to_off(name_rva):end].decode("ascii").lower())
+                  off += 20
+              return names
+
+          tess = import_names("stage/tesseract.dll")
+          lept = import_names("stage/leptonica.dll")
+          print("tesseract.dll imports:", tess)
+          print("leptonica.dll imports:", lept)
+          assert "leptonica.dll" in tess, "tesseract.dll must import leptonica.dll by that exact name"
+          assert set(tess) - {"leptonica.dll"} <= SYSTEM, f"tesseract.dll has non-system imports: {set(tess) - {'leptonica.dll'} - SYSTEM}"
+          assert set(lept) <= SYSTEM, f"leptonica.dll has non-system imports: {set(lept) - SYSTEM}"
+      - name: Package
+        shell: bash
+        run: |
+          tar -czf chilli-ocr-windows64.tar.gz -C stage .
+          tar -tzf chilli-ocr-windows64.tar.gz
+          sha256sum chilli-ocr-windows64.tar.gz
+      - uses: actions/upload-artifact@v7
+        with:
+          name: chilli-ocr-windows64
+          path: chilli-ocr-windows64.tar.gz
