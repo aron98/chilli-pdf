@@ -81,9 +81,11 @@ machine and is **not** claimed as done.
 ## Issue #19: Release packaging
 
 Everything below marked ✅ was actually executed on the dev machine
-(headless Linux, network available at build time). The Tesseract and
-Leptonica native libraries are still clearly-marked fixture placeholders
-(see `docs/packaging.md`); everything else in the fetched set is real.
+(headless Linux, network available at build time). At the time of this
+run the Tesseract and Leptonica native libraries were still
+clearly-marked fixture placeholders (see `docs/packaging.md`);
+everything else in the fetched set was real. (The real pins landed with
+issue #42; this section records the issue #19 state.)
 
 ### ✅ Proven locally
 
