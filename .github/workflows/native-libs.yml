@@ -57,10 +57,20 @@ env:
 jobs:
   linux64:
     name: prebuilts (chilli-ocr-linux64)
-    runs-on: ubuntu-24.04
+    # Built inside an ubuntu:22.04 container so the shipped pair only
+    # requires glibc >= 2.35 (Ubuntu 22.04 / Debian 12 era systems).
+    # Building on the newer runner image silently drags in glibc 2.38+
+    # symbol versions (caught live during the issue #42 local
+    # verification run) and would break older end-user systems.
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
     steps:
-      - name: Install relocation tooling
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends patchelf
+      # The container runs as root; no sudo inside it.
+      - name: Install build and relocation tooling
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates curl patchelf cmake ninja-build g++ binutils
       - name: Download and verify the pinned sources
         shell: bash
         run: |
@@ -127,6 +137,12 @@ jobs:
           # And the sibling must actually resolve from the same directory.
           ldd "stage/libtesseract.so" | grep -q 'libleptonica.so => /'
           ! ldd "stage/libtesseract.so" | grep -q 'not found'
+          # glibc baseline: the shipped pair must not require anything
+          # newer than the ubuntu:22.04 toolchain it was built with.
+          minor="$( (objdump -T stage/libtesseract.so; objdump -T stage/libleptonica.so) \
+            | grep -oE 'GLIBC_2\.[0-9]+' | sed 's/^GLIBC_2\.//' | sort -n | tail -1)"
+          echo "highest GLIBC_2.x symbol version required: ${minor}"
+          test "${minor}" -le 35
       - name: Package
         run: |
           tar -czf "chilli-ocr-linux64.tar.gz" -C stage .

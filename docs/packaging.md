@@ -57,6 +57,12 @@ All pins live in the pin table at the top of `scripts/fetch-assets`:
   (PDFium 157.0.8100.0, published 2026-10-12). Both the downloaded
   archive **and** the library inside it are verified against pinned
   SHA-256 values before the library is placed into the overlay.
+- **Tesseract 5.5.3 + Leptonica 1.87.0** — our own relocated prebuilts,
+  built from the pinned upstream sources by
+  `.github/workflows/native-libs.yml` and published on this repository's
+  `ocr-prebuilts-1` release. As with PDFium, both the downloaded archive
+  **and** the library inside it are verified against pinned SHA-256
+  values (see the prebuilts section below).
 - **traineddata** — `tesseract-ocr/tessdata_fast` at commit
   `87416418657359cb625c412a48b6e1d6d41c29bd` (2024-08-01), `eng` and
   `hun`, each verified against its pinned SHA-256. The `fast` variants
@@ -80,30 +86,72 @@ generator as the fixture bundle:
 cargo run --example update_asset_manifest -- --dir assets/real/v1 --out assets/real/manifest.txt
 ```
 
-### Tesseract & Leptonica native libraries: PLACEHOLDER
+### Tesseract & Leptonica native libraries: our own prebuilts
 
 There is **no canonical portable prebuilt source** for the Tesseract and
 Leptonica libraries across the three OSes:
 
 - Windows: the UB-Mannheim build is the de-facto standard, but ships as
-  an installer, not as standalone pinned library files.
+  an installer, not as standalone pinned library files (details on why
+  it is unsuitable below).
 - Linux: distro packages are not vendorable (sonames/paths differ per
   distro).
 - macOS: Homebrew bottles are built against the local prefix and are
   not portable.
 
-Chosen strategy (decision recorded in issue #19): **vendored prebuilts,
-pinned per release exactly like PDFium** — i.e. pin a stable upstream
-artifact per OS, verify it, embed it. Until such artifacts are picked,
-`scripts/fetch-assets` marks these two slots as **placeholders**: it
-copies the committed fixture blobs into the real overlay and prints a
-loud warning, so the manifest stays complete, checksums stay honest,
-and any release built from the overlay is visibly incapable of real
-OCR (see `THIRD_PARTY_NOTICES.md`). Candidate sources to evaluate when
-replacing the placeholder: extracting `tesseract.dll`/`leptonica.dll`
-from a pinned UB-Mannheim build (Windows), and producing static or
-relocated prebuilts in our own CI from pinned upstream source releases
-(Linux/macOS).
+Chosen strategy (decision recorded in issues #19 and #42): we build
+**our own relocated prebuilts from pinned upstream source releases**
+and publish them as stable artifacts attached to a dedicated non-`v*`
+release tag of this repository (`ocr-prebuilts-1`), exactly the model
+`bblanchon/pdfium-binaries` provides for PDFium. `scripts/fetch-assets`
+pins each platform archive's URL plus the SHA-256 of **both** the
+archive and the inner library, and verifies both before anything
+reaches the overlay.
+
+Pinned upstream sources (also recorded in the pin table and the
+`ocr-prebuilts-1` release notes):
+
+| Source | Version | URL | SHA-256 |
+|--------|---------|-----|---------|
+| Leptonica | 1.87.0 (2025-12-24) | `https://github.com/DanBloomberg/leptonica/releases/download/1.87.0/leptonica-1.87.0.tar.gz` | `c73363397f96eb1295602bf44d708a994ad42046c791bf03ea0505d829bdb6a7` |
+| Tesseract | 5.5.3 (2026-07-24) | `https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.5.3.tar.gz` | `9218e62793116d42a9f6d14cd9348518b27f382096eea3d0f2d1a24616bb5884` |
+
+`.github/workflows/native-libs.yml` (`workflow_dispatch`) builds all
+three platforms from exactly these pins:
+
+| Platform | Runner | Build configuration | Relocation contract |
+|----------|--------|---------------------|----------------------|
+| linux64 | `ubuntu:22.04` container on an `ubuntu-latest` runner | leptonica: all codecs off (chilli feeds raw pixels; no codec paths exist), shared only, no programs; tesseract: no training tools, graphics disabled, OpenMP off, archive/curl/TIFF off | soname set to `libleptonica.so`, tesseract rpath `$ORIGIN` — resolves the sibling from the extracted per-user assets dir; glibc ≥ 2.35 baseline (Ubuntu 22.04 / Debian 12 era), asserted in the workflow |
+| macos | `macos-15` (arm64, matches the PDFium mac-arm64 pin) | same | install name `@loader_path/libleptonica.dylib`, ad-hoc re-signed after editing |
+| windows64 | `windows-latest` (MSVC) | same feature set, static CRT (`MultiThreaded`) so no `vcruntime140.dll` dependency | outputs exactly `tesseract.dll` + `leptonica.dll`; tesseract imports `leptonica.dll` **by name**, satisfied by the leptonica-first preload in `src/ocr/ffi.rs` — no Windows loader search-path dependence |
+
+Each workflow job ends with hard assertions on the produced binaries
+(ELF `DT_NEEDED`/`DT_RUNPATH`, Mach-O load commands + code signature,
+PE import tables), so no absolute build-machine path can ever ship and
+the Windows pair can never grow a non-system import.
+
+#### Why Windows does not use the UB-Mannheim installer (issue #42)
+
+The original plan — extract `tesseract.dll`/`leptonica.dll` from a
+pinned UB-Mannheim installer — was investigated and rejected on the
+following evidence, verified against the actual installers:
+
+- The installer is an **NSIS** package (Nullsoft v3.08), not Inno
+  Setup, so `innoextract` cannot open it at all (it supports Inno
+  Setup ≤ 6.0.5).
+- The libraries inside are `libtesseract-5.dll` and
+  `libleptonica-6.dll`, not the bundled slot names; renaming files
+  afterwards does not rename the PE import entries that reference them.
+- Those import entries are **eager (static) imports** — the delay-load
+  directory is empty — of a ~32-DLL MinGW closure totalling ~46 MB,
+  including `libcurl-4.dll`, `libcrypto-3-x64.dll`, `libarchive-13.dll`
+  and eight codec DLLs. Bundling a network/TLS stack in a
+  privacy-focused offline app is unacceptable, and the closure would
+  double-load leptonica under two names.
+
+Building our own minimal pair from the same pinned sources keeps the
+two-DLL bundle, the static CRT, the no-network property, and the
+leptonica-first preload resolution contract documented above.
 
 ### The placeholder guard (issue #42) — fail-closed by profile and by bytes
 
@@ -130,16 +178,14 @@ Practical consequences:
   the DEGRADED warning states exactly what the binary contains.
 - `cargo build --release` **requires** `scripts/fetch-assets` to have
   run first. The CI `build` job therefore builds the debug profile
-  (fixture mode); release-profile compile coverage lives in the `e2e`
-  CI job (real assets fetched at build time) and in the Release
-  workflow (which always fetches assets before building).
-- While the Tesseract/Leptonica pins are still placeholders (see the
-  section above), any release-profile build against a fetched overlay
-  fails: the fetch script copies the placeholder bytes for those two
-  slots, and the guard refuses them even in real-assets mode. That is
-  the guard doing its job — a release binary with placeholder engines
-  must never exist again. Real pins turn this green without any
-  further change.
+  (fixture mode); release-profile compile coverage lives in the
+  Release workflow (which always fetches assets before building).
+- With the real Tesseract/Leptonica pins in place (see the prebuilts
+  section above), a fetched overlay passes the guard in every profile:
+  the six OCR slots hold real engines whose digests differ from the
+  fixture placeholders. The guard stays as the permanent tripwire — if
+  the pins ever regress to placeholder bytes, the release build fails
+  again.
 - A missing `PROFILE` variable or an unreadable/unparseable fixture
   manifest is also a hard error: the guard fails closed on incomplete
   data rather than silently skipping the check.
@@ -150,17 +196,28 @@ SHA-256 values and placeholder-sized files.
 
 ## Re-pinning procedure
 
-1. Bump the pin values in `scripts/fetch-assets` (URLs + both SHA-256
+For the Tesseract/Leptonica slots, re-pinning starts one step earlier —
+produce new prebuilts first:
+
+1. Update the source pins (URLs + SHA-256) in both
+   `scripts/fetch-assets` **and** `.github/workflows/native-libs.yml`
+   (they must stay in sync — the workflow builds what the pin table
+   claims), then run the workflow via `workflow_dispatch`.
+2. Verify the built binaries' relocation assertions pass (the workflow
+   enforces them), and publish the three archives on a new dedicated
+   non-`v*` release tag (e.g. `ocr-prebuilts-2`) with the source pins
+   recorded in the release notes.
+3. Bump the pin values in `scripts/fetch-assets` (URLs + both SHA-256
    columns: archive **and** inner library). Never widen verification.
-2. Run `scripts/fetch-assets` for every platform and let the checksum
+4. Run `scripts/fetch-assets` for every platform and let the checksum
    gate pass (a mismatch means either a wrong pin or a compromised
    source — investigate, do not bypass).
-3. Bump `ASSET_VERSION` in `src/assets.rs` whenever any pinned asset's
+5. Bump `ASSET_VERSION` in `src/assets.rs` whenever any pinned asset's
    bytes change, so existing users get a fresh extraction directory
    instead of a checksum failure against the previously published set.
-4. Update `THIRD_PARTY_NOTICES.md` (versions and sources) and this
+6. Update `THIRD_PARTY_NOTICES.md` (versions and sources) and this
    file's pin references.
-5. Ship through the Release workflow only — never commit fetched
+7. Ship through the Release workflow only — never commit fetched
    binaries; `assets/real/` is gitignored.
 
 ## Release workflow
