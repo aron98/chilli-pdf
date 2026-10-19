@@ -122,6 +122,44 @@ Leptonica native libraries are still clearly-marked fixture placeholders
 | Global `SHA256SUMS` over all per-OS archives attached to the release | GitHub Actions runners | download artifacts, re-check digests |
 | Release archive unpacks and runs with no dev tools, no OCR libs, no network | clean Windows/macOS/Linux machines | acceptance checks 1–6 above (issue #21) |
 
+## Issue #42: placeholder guard and bundled-asset acceptance
+
+### ✅ Proven locally / by construction
+
+- **Build guard semantics** (see `docs/packaging.md` "The placeholder
+  guard"): fixture bundle + release profile → hard build error; fixture
+  bundle + debug profile → allowed with a loud DEGRADED warning; any
+  fetched overlay carrying placeholder Tesseract/Leptonica bytes → hard
+  build error in every profile. `tests/build_guard.rs` pins the data
+  source (all six OCR slots present in `assets/manifest.txt` with
+  well-formed checksums and placeholder-sized files).
+- `cargo test` keeps working offline from a fresh checkout in fixture
+  mode (the unit suite builds on the placeholder blobs through the
+  documented DEGRADED debug path).
+
+### Bundled-asset acceptance driver (issue #42 item 3)
+
+The acceptance driver runs the production pipeline against the
+**per-user extracted bundled assets only** — `PipelineConverter::
+production()` never consults a scratch or system fallback, and the
+driver now proves it on every run:
+
+```sh
+cargo run --example verify_acceptance -- --bundled-assets [--out <dir>]
+```
+
+The `--bundled-assets` flag states the (default and only) acceptance
+mode explicitly for self-documenting scripts; there is no flag that
+weakens it. The bundled-assets check fails the run when any of
+`CHILLI_PDFIUM_LIB`, `CHILLI_OCR_TESSERACT_LIB`, `CHILLI_OCR_TESSDATA`
+is set (the dev/test escape hatches must not influence the evidence),
+verifies `ensure_assets()` extraction directly, and refuses extracted
+engine bytes that match the committed fixture placeholder checksums.
+This closes the evidence gap of the 2026-10-18 #21 run, where system
+Tesseract/Leptonica were substituted into the overlay (disclosed in
+`docs/verification-report.md`) — a substitution that can no longer
+pass unnoticed.
+
 ## Standing per-release checks
 
 - [ ] `cargo test`, `cargo fmt --check`, `cargo clippy -- -D warnings` green on all three CI platforms
