@@ -177,13 +177,17 @@ before/after, no temp residue.
 
 Status: the job is EXPECTED-RED on every head that predates the real
 Tesseract/Leptonica pins — the fail-closed guard branch head, or this
-branch before it is stacked on the native-libs branch: there
+branch before it was stacked on the native-libs branch: there
 `scripts/fetch-assets` still copies the placeholder bytes for those
 two slots and the build guard refuses the release build on purpose.
 The pins land in this branch's stacked parent
 (`feat/issue-42-native-libs`), so on this branch's head the job runs
-GREEN — with no change to the job definition itself. ⏳ first actual
-CI run still pending (the branch has not been pushed yet).
+GREEN — with no change to the job definition itself. Verified locally
+2026-10-19 on this branch's head (Linux, real pinned assets fetched
+by `scripts/fetch-assets`): `cargo build --release --locked` embeds
+the real assets with no DEGRADED warning, and the e2e driver passes
+5/5 checks (exit 0). ⏳ first actual CI run still pending (the
+branch has not been pushed yet).
 
 The CI `build` job now compiles the debug profile
 (`cargo build --locked`): release-profile compile coverage moved to the
