@@ -21,11 +21,11 @@
 # the arm64 (Apple Silicon) artifacts because that is what the release
 # workflow builds on; see docs/packaging.md before changing that.
 #
-# Tesseract and Leptonica native libraries are PLACEHOLDER pins: the
-# committed fixture bytes are copied in with a loud warning, because no
-# canonical portable prebuilt source exists for them (yet). See
-# docs/packaging.md § "Tesseract & Leptonica native libraries" and the
-# issue #19 notes before shipping a release that claims real OCR libs.
+# Tesseract and Leptonica are our own relocated prebuilts (issues #19
+# and #42), built from pinned upstream sources by the `native-libs`
+# workflow and published on this repository's `ocr-prebuilts-1`
+# release; the pin table below and docs/packaging.md record the
+# provenance.
 
 set -euo pipefail
 
@@ -71,8 +71,40 @@ PDFIUM_WINDOWS_LIB_SHA256="ae913f407e8d3f5cdbf08a9869564d647b13e132e01eb376c0a5a
 # (tests/fixtures/pdf.ttf, provenance /usr/share/tesseract-ocr/5/tessdata/
 # pdf.ttf), so it is copied rather than downloaded.
 
-# Tesseract & Leptonica native libraries: PLACEHOLDER pins (see header).
-# The committed fixtures under assets/v1/ are copied into the overlay.
+# Tesseract 5.5.3 + Leptonica 1.87.0 — our own relocated prebuilts
+# (issues #19/#42), built on GitHub runners by
+# .github/workflows/native-libs.yml from these pinned upstream sources:
+#   Leptonica 1.87.0 (2025-12-24):
+#     https://github.com/DanBloomberg/leptonica/releases/download/1.87.0/leptonica-1.87.0.tar.gz
+#     SHA-256 c73363397f96eb1295602bf44d708a994ad42046c791bf03ea0505d829bdb6a7
+#   Tesseract 5.5.3 (2026-07-24):
+#     https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.5.3.tar.gz
+#     SHA-256 9218e62793116d42a9f6d14cd9348518b27f382096eea3d0f2d1a24616bb5884
+# and published as per-OS archives on this repository's release tag
+# `ocr-prebuilts-1` (bblanchon-style stable URLs; release notes record
+# the build provenance). Each archive holds both libraries at its
+# root, already named as the bundled slots. Relocation contracts:
+#   linux64:   soname libleptonica.so, libtesseract rpath $ORIGIN
+#   macos:     install names @loader_path/... (arm64)
+#   windows64: tesseract.dll imports leptonica.dll by name, satisfied
+#              by the leptonica-first preload (src/ocr/ffi.rs); static CRT
+OCR_TAG="ocr-prebuilts-1"
+OCR_BASE_URL="https://github.com/aron98/chilli-pdf/releases/download/${OCR_TAG}"
+
+OCR_LINUX_ARCHIVE="chilli-ocr-linux64.tar.gz"
+OCR_LINUX_ARCHIVE_SHA256="2c33789ea7d82023c4ce26a54c26b581f473bc6b60d87f3fbb84e515eb253089"
+OCR_LINUX_TESSERACT_SHA256="a49c6a8c7da42138b32eadccff8bd1d9bf56395621fa6a416dcb10eaacade905"
+OCR_LINUX_LEPTONICA_SHA256="7c63a93a476db4a15126601695e9a4e47e563f7296d0d86571b9411632a06ca9"
+
+OCR_MACOS_ARCHIVE="chilli-ocr-macos.tar.gz"
+OCR_MACOS_ARCHIVE_SHA256="4df9063c7d14b2ea78c58a3ef62dcdb6717f82b0ddf808972b1adf2a16b8e89a"
+OCR_MACOS_TESSERACT_SHA256="acceed351467bb316448b28fa6dc282f93e27cfa0312c0ade755305dcc0527ad"
+OCR_MACOS_LEPTONICA_SHA256="0184052ef347d88919697a859bed8378b87406a50d189d264ed180742dcccb37"
+
+OCR_WINDOWS_ARCHIVE="chilli-ocr-windows64.tar.gz"
+OCR_WINDOWS_ARCHIVE_SHA256="c8b83c26536f8a9e1ed11b9e0b45143ebb1f52f9fe3c77fbaaf5e59ad4cb03c6"
+OCR_WINDOWS_TESSERACT_SHA256="70283aaca85f03ebf062f2ff618da7227506448371504bd8646ff91d09716e16"
+OCR_WINDOWS_LEPTONICA_SHA256="dab8789d14004514c05e95b49db7c720a5acdc3ccd99ef1699e10dd884555344"
 
 # ---------------------------------------------------------------------------
 
@@ -98,9 +130,9 @@ Usage:
 --platform defaults to the machine running the script; 'macos' pins the
 arm64 artifacts (that is what the release workflow builds on).
 
-Tesseract and Leptonica native libraries are PLACEHOLDER pins (fixture
-bytes with a loud warning): no canonical portable prebuilt source exists
-yet. See docs/packaging.md before shipping a release.
+Tesseract and Leptonica come from this repository's ocr-prebuilts-1
+release: our own relocated prebuilts built from pinned upstream sources
+by the native-libs workflow (see docs/packaging.md).
 USAGE
 }
 
@@ -177,7 +209,12 @@ case "${platform}" in
     pdfium_inner="${PDFIUM_LINUX_INNER}"
     pdfium_out="${PDFIUM_LINUX_OUT}"
     pdfium_lib_sha256="${PDFIUM_LINUX_LIB_SHA256}"
-    fixture_libs=("libtesseract.so" "libleptonica.so")
+    ocr_archive="${OCR_LINUX_ARCHIVE}"
+    ocr_archive_sha256="${OCR_LINUX_ARCHIVE_SHA256}"
+    ocr_tesseract_sha256="${OCR_LINUX_TESSERACT_SHA256}"
+    ocr_leptonica_sha256="${OCR_LINUX_LEPTONICA_SHA256}"
+    ocr_tesseract_out="libtesseract.so"
+    ocr_leptonica_out="libleptonica.so"
     ;;
   macos)
     pdfium_archive="${PDFIUM_MACOS_ARCHIVE}"
@@ -185,7 +222,12 @@ case "${platform}" in
     pdfium_inner="${PDFIUM_MACOS_INNER}"
     pdfium_out="${PDFIUM_MACOS_OUT}"
     pdfium_lib_sha256="${PDFIUM_MACOS_LIB_SHA256}"
-    fixture_libs=("libtesseract.dylib" "libleptonica.dylib")
+    ocr_archive="${OCR_MACOS_ARCHIVE}"
+    ocr_archive_sha256="${OCR_MACOS_ARCHIVE_SHA256}"
+    ocr_tesseract_sha256="${OCR_MACOS_TESSERACT_SHA256}"
+    ocr_leptonica_sha256="${OCR_MACOS_LEPTONICA_SHA256}"
+    ocr_tesseract_out="libtesseract.dylib"
+    ocr_leptonica_out="libleptonica.dylib"
     ;;
   windows64)
     pdfium_archive="${PDFIUM_WINDOWS_ARCHIVE}"
@@ -193,7 +235,12 @@ case "${platform}" in
     pdfium_inner="${PDFIUM_WINDOWS_INNER}"
     pdfium_out="${PDFIUM_WINDOWS_OUT}"
     pdfium_lib_sha256="${PDFIUM_WINDOWS_LIB_SHA256}"
-    fixture_libs=("tesseract.dll" "leptonica.dll")
+    ocr_archive="${OCR_WINDOWS_ARCHIVE}"
+    ocr_archive_sha256="${OCR_WINDOWS_ARCHIVE_SHA256}"
+    ocr_tesseract_sha256="${OCR_WINDOWS_TESSERACT_SHA256}"
+    ocr_leptonica_sha256="${OCR_WINDOWS_LEPTONICA_SHA256}"
+    ocr_tesseract_out="tesseract.dll"
+    ocr_leptonica_out="leptonica.dll"
     ;;
   *) die "unhandled platform '${platform}'" ;;
 esac
@@ -235,23 +282,27 @@ done
 cp "${ROOT}/tests/fixtures/pdf.ttf" "${OVERLAY}/pdf.ttf"
 note "placed pdf.ttf (the committed production glyphless font)"
 
-# --- Tesseract & Leptonica: PLACEHOLDER (fixture bytes). ---
-#
-# No canonical portable prebuilt source exists for these libraries yet
-# (Windows: UB-Mannheim installers only; Linux/macOS: no portable
-# official prebuilts). Until the placeholder is replaced with pinned
-# upstream prebuilts (docs/packaging.md § "Tesseract & Leptonica"), the
-# committed fixture blobs keep the manifest complete so builds, tests,
-# and the checksum pipeline stay honest about what would be embedded.
-for lib in "${fixture_libs[@]}"; do
-  cp "${ROOT}/assets/v1/${lib}" "${OVERLAY}/${lib}"
+# --- Tesseract & Leptonica: our own relocated prebuilts (pin table
+# --- above; provenance and relocation contracts in docs/packaging.md).
+# --- Download the pinned archive, verify it, unpack to a scratch dir,
+# --- verify BOTH libraries inside it, and copy them under their
+# --- bundled slot names. Fail-closed end to end like the PDFium block.
+ocr_archive_file="${workdir}/${ocr_archive}"
+download "${OCR_BASE_URL}/${ocr_archive}" "${ocr_archive_file}"
+verify_sha256 "${ocr_archive_file}" "${ocr_archive_sha256}"
+
+ocr_dir="${workdir}/ocr"
+mkdir -p "${ocr_dir}"
+tar -xzf "${ocr_archive_file}" -C "${ocr_dir}"
+for lib in "${ocr_tesseract_out}" "${ocr_leptonica_out}"; do
+  [ -f "${ocr_dir}/${lib}" ] || die "expected '${lib}' inside the OCR prebuilts archive"
 done
-cat >&2 <<'PLACEHOLDER_NOTICE'
-fetch-assets: WARNING: Tesseract and Leptonica native libraries are
-  PLACEHOLDERS (fixture bytes, ~1-2 KB each). A release built from this
-  overlay CANNOT run real OCR. Replace the placeholder pins before
-  shipping; see docs/packaging.md and the issue #19 notes.
-PLACEHOLDER_NOTICE
+verify_sha256 "${ocr_dir}/${ocr_tesseract_out}" "${ocr_tesseract_sha256}"
+verify_sha256 "${ocr_dir}/${ocr_leptonica_out}" "${ocr_leptonica_sha256}"
+for lib in "${ocr_tesseract_out}" "${ocr_leptonica_out}"; do
+  cp "${ocr_dir}/${lib}" "${OVERLAY}/${lib}"
+  note "placed ${lib} ($(stat -c%s "${ocr_dir}/${lib}" 2>/dev/null || stat -f%z "${ocr_dir}/${lib}") bytes)"
+done
 
 # --- Regenerate the overlay's manifest (one command, canonical format).
 note "regenerating assets/real/manifest.txt"

@@ -5,7 +5,7 @@
 //! check of `docs/verification-plan.md`.
 //!
 //! Usage:
-//!     cargo run --example verify_acceptance -- [--out <dir>]
+//!     cargo run --example verify_acceptance -- [--bundled-assets] [--out <dir>]
 //!
 //! Why an example and not a test: the run needs the real asset bundle
 //! (fetch it with `scripts/fetch-assets` first) and spends seconds of
@@ -34,10 +34,17 @@
 //! search/copy, 150 DPI raster comparison, network observation) is
 //! gathered around this driver and recorded in the verification report.
 //!
+//! `--bundled-assets` is the (default and only) acceptance mode: the run
+//! must get every engine and model from the per-user extracted bundle
+//! (`PipelineConverter::production()` never consults a scratch or
+//! system fallback, and the bundled-assets check proves it — including
+//! refusing the historical placeholder bytes). The flag exists so CI
+//! and dev scripts can state that contract explicitly.
+//!
 //! Exit codes: 0 all checks passed, 1 at least one failed, 2 the build
 //! uses the fixture asset bundle (real assets required).
 
-use chilli_pdf::assets::manifest;
+use chilli_pdf::assets::{AssetManifest, NativeLib, ensure_assets, manifest};
 use chilli_pdf::converter::{Converter, Job, WorkerEvent};
 use chilli_pdf::language::LanguagePreset;
 use chilli_pdf::output_path::{Conflict, check_output, default_output_path};
@@ -54,7 +61,8 @@ use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "usage: cargo run --example verify_acceptance -- [--out <dir>]";
+const USAGE: &str =
+    "usage: cargo run --example verify_acceptance -- [--bundled-assets] [--out <dir>]";
 
 /// Fixture PDFs the run touches. Each is SHA-256-checked before and
 /// after everything: the pipeline must never modify its inputs.
@@ -118,6 +126,10 @@ fn main() {
     let before_digests = fixture_digests().unwrap_or_else(|e| die(&e));
 
     let mut report = Report::default();
+    report.record(
+        "bundle: bundled-assets mode (no scratch/system fallback)",
+        check_bundled_assets(),
+    );
     report.record("bundle: real assets present", check_real_bundle());
 
     let ctx = Ctx {
@@ -191,7 +203,10 @@ fn main() {
     exit(i32::from(!report.failed.is_empty()));
 }
 
-/// Parse `[--out <dir>]`; the default scratch tree lives under `target/`.
+/// Parse `[--bundled-assets] [--out <dir>]`; the default scratch tree
+/// lives under `target/`. `--bundled-assets` is the default (and only)
+/// acceptance mode — accepted so scripts can state the contract
+/// explicitly; there is deliberately no flag that would weaken it.
 fn parse_args() -> PathBuf {
     let mut args = env::args_os().skip(1);
     let mut out: Option<PathBuf> = None;
@@ -201,6 +216,7 @@ fn parse_args() -> PathBuf {
                 println!("{USAGE}");
                 exit(0);
             }
+            "--bundled-assets" => {}
             "--out" => {
                 out = Some(args.next().map(PathBuf::from).unwrap_or_else(|| die(USAGE)));
             }
@@ -415,6 +431,103 @@ fn require_clean(dir: &Path) -> Result<(), String> {
         residue.is_empty(),
         format!("temp files left behind: {residue:?}"),
     )
+}
+
+/// The bundled-assets acceptance check (issue #42): prove the run uses
+/// ONLY the per-user extracted bundle. The #21 verification run once
+/// passed while placeholder engine bytes shipped, because a system
+/// fallback was providing the real engines behind the pipeline's back —
+/// this check closes that evidence gap:
+///
+/// (a) the dev/test escape-hatch env vars must not be set, so nothing
+///     outside the bundle can influence engine resolution;
+/// (b) `ensure_assets()` — the exact call `PipelineConverter::production()`
+///     makes — must extract and checksum-verify the bundle per-user;
+/// (c) the extracted Tesseract/Leptonica bytes must NOT match the
+///     committed fixture placeholder checksums (the canonical placeholder
+///     definition, read from the fixture manifest that is always
+///     committed regardless of bundle mode).
+fn check_bundled_assets() -> Result<Vec<String>, String> {
+    let mut evidence = Vec::new();
+
+    for var in [
+        "CHILLI_PDFIUM_LIB",
+        "CHILLI_OCR_TESSERACT_LIB",
+        "CHILLI_OCR_TESSDATA",
+    ] {
+        if let Some(value) = env::var_os(var) {
+            return Err(format!(
+                "{var} is set ({value:?}) — the acceptance run must use ONLY the \
+                 bundled assets; unset it and re-run"
+            ));
+        }
+    }
+    evidence.push(
+        "escape-hatch env vars unset (CHILLI_PDFIUM_LIB, CHILLI_OCR_TESSERACT_LIB, \
+         CHILLI_OCR_TESSDATA)"
+            .to_owned(),
+    );
+
+    let extracted = ensure_assets().map_err(|e| format!("ensure_assets() failed: {e}"))?;
+    let dir = extracted.dir().to_path_buf();
+    evidence.push(format!("per-user extracted bundle: {}", dir.display()));
+    for library in [
+        NativeLib::Pdfium,
+        NativeLib::Leptonica,
+        NativeLib::Tesseract,
+    ] {
+        let path = extracted
+            .library_path(library)
+            .map_err(|e| format!("cannot resolve {library:?} path: {e}"))?;
+        let size = fs::metadata(&path)
+            .map_err(|e| format!("cannot stat {}: {e}", path.display()))?
+            .len();
+        evidence.push(format!(
+            "{}: {} ({size} B)",
+            name_of(library),
+            path.display()
+        ));
+    }
+
+    // The committed fixture manifest is the canonical placeholder
+    // definition (embedded at compile time regardless of bundle mode).
+    let fixture_manifest = AssetManifest::parse(include_str!("../assets/manifest.txt"))
+        .map_err(|e| format!("cannot parse the committed fixture manifest: {e}"))?;
+    for library in [NativeLib::Leptonica, NativeLib::Tesseract] {
+        let path = extracted
+            .library_path(library)
+            .map_err(|e| format!("cannot resolve {library:?} path: {e}"))?;
+        let bytes = fs::read(&path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+        let digest = hex::encode(Sha256::digest(&bytes));
+        let slot = library.platform_file_name();
+        let placeholder = fixture_manifest
+            .entry(slot)
+            .ok_or_else(|| format!("fixture manifest has no entry for slot {slot:?}"))?;
+        if digest == hex::encode(placeholder.sha256) {
+            return Err(format!(
+                "{} is byte-identical to the committed fixture placeholder \
+                 (sha256 {digest}) — the bundled assets are NOT the real engine \
+                 (issue #42); re-run scripts/fetch-assets with real pins",
+                path.display()
+            ));
+        }
+        evidence.push(format!(
+            "sha256 of extracted {slot} ({size} B) differs from the fixture \
+             placeholder — real engine bytes",
+            size = bytes.len()
+        ));
+    }
+
+    Ok(evidence)
+}
+
+/// Human-readable name for evidence lines.
+fn name_of(library: NativeLib) -> &'static str {
+    match library {
+        NativeLib::Pdfium => "pdfium",
+        NativeLib::Tesseract => "tesseract",
+        NativeLib::Leptonica => "leptonica",
+    }
 }
 
 fn check_real_bundle() -> Result<Vec<String>, String> {

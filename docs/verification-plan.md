@@ -81,9 +81,11 @@ machine and is **not** claimed as done.
 ## Issue #19: Release packaging
 
 Everything below marked ✅ was actually executed on the dev machine
-(headless Linux, network available at build time). The Tesseract and
-Leptonica native libraries are still clearly-marked fixture placeholders
-(see `docs/packaging.md`); everything else in the fetched set is real.
+(headless Linux, network available at build time). At the time of this
+run the Tesseract and Leptonica native libraries were still
+clearly-marked fixture placeholders (see `docs/packaging.md`);
+everything else in the fetched set was real. (The real pins landed with
+issue #42; this section records the issue #19 state.)
 
 ### ✅ Proven locally
 
@@ -121,6 +123,76 @@ Leptonica native libraries are still clearly-marked fixture placeholders
 | Per-OS release job: fetch → build `--locked` → `--version` smoke-check → portable archive | GitHub Actions runners | push a `v*` tag and watch the release workflow |
 | Global `SHA256SUMS` over all per-OS archives attached to the release | GitHub Actions runners | download artifacts, re-check digests |
 | Release archive unpacks and runs with no dev tools, no OCR libs, no network | clean Windows/macOS/Linux machines | acceptance checks 1–6 above (issue #21) |
+
+## Issue #42: placeholder guard, bundled-asset acceptance, real-engine e2e
+
+### ✅ Proven locally / by construction
+
+- **Build guard semantics** (see `docs/packaging.md` "The placeholder
+  guard"): fixture bundle + release profile → hard build error; fixture
+  bundle + debug profile → allowed with a loud DEGRADED warning; any
+  fetched overlay carrying placeholder Tesseract/Leptonica bytes → hard
+  build error in every profile. `tests/build_guard.rs` pins the data
+  source (all six OCR slots present in `assets/manifest.txt` with
+  well-formed checksums and placeholder-sized files).
+- `cargo test` keeps working offline from a fresh checkout in fixture
+  mode (the unit suite builds on the placeholder blobs through the
+  documented DEGRADED debug path).
+
+### Bundled-asset acceptance driver (issue #42 item 3)
+
+The acceptance driver runs the production pipeline against the
+**per-user extracted bundled assets only** — `PipelineConverter::
+production()` never consults a scratch or system fallback, and the
+driver now proves it on every run:
+
+```sh
+cargo run --example verify_acceptance -- --bundled-assets [--out <dir>]
+```
+
+The `--bundled-assets` flag states the (default and only) acceptance
+mode explicitly for self-documenting scripts; there is no flag that
+weakens it. The bundled-assets check fails the run when any of
+`CHILLI_PDFIUM_LIB`, `CHILLI_OCR_TESSERACT_LIB`, `CHILLI_OCR_TESSDATA`
+is set (the dev/test escape hatches must not influence the evidence),
+verifies `ensure_assets()` extraction directly, and refuses extracted
+engine bytes that match the committed fixture placeholder checksums.
+This closes the evidence gap of the 2026-10-18 #21 run, where system
+Tesseract/Leptonica were substituted into the overlay (disclosed in
+`docs/verification-report.md`) — a substitution that can no longer
+pass unnoticed.
+
+### Real-engine e2e CI job (issue #42 item 4)
+
+`.github/workflows/ci.yml` runs an `e2e` job on the ubuntu/macos/windows
+matrix: `scripts/fetch-assets` (build-time network only — the shipped
+binary's runtime stays offline), `cargo build --release --locked` and
+`cargo run --release --locked --example e2e_convert`. The driver
+converts the committed `eng_scan.pdf` (English), `hun_scan.pdf`
+(Hungarian, `ő`/`ű`) and `rotated_scan.pdf` (`/Rotate 90`) through the
+production pipeline with in-Rust lopdf assertions: exact event streams,
+overlay text non-empty and in the right language, no U+FFFD/mojibake,
+boxes/rotation/original content streams preserved, fixture SHA-256
+before/after, no temp residue.
+
+Status: the job is EXPECTED-RED on every head that predates the real
+Tesseract/Leptonica pins — the fail-closed guard branch head, or this
+branch before it was stacked on the native-libs branch: there
+`scripts/fetch-assets` still copies the placeholder bytes for those
+two slots and the build guard refuses the release build on purpose.
+The pins land in this branch's stacked parent
+(`feat/issue-42-native-libs`), so on this branch's head the job runs
+GREEN — with no change to the job definition itself. Verified locally
+2026-10-19 on this branch's head (Linux, real pinned assets fetched
+by `scripts/fetch-assets`): `cargo build --release --locked` embeds
+the real assets with no DEGRADED warning, and the e2e driver passes
+5/5 checks (exit 0). ⏳ first actual CI run still pending (the
+branch has not been pushed yet).
+
+The CI `build` job now compiles the debug profile
+(`cargo build --locked`): release-profile compile coverage moved to the
+`e2e` job (which builds `--release` against fetched real assets) and to
+the Release workflow.
 
 ## Standing per-release checks
 
