@@ -6,6 +6,29 @@ follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-10-19
+
+Hotfix release: v1.0.0 shipped with placeholder Tesseract/Leptonica
+libraries, which made OCR fail on every platform. This release bundles
+real, pinned libraries (issue #42).
+
+### Fixed
+
+- Replaced the placeholder Tesseract and Leptonica bundles with real,
+  relocated, pinned prebuilts for all supported platforms (x86_64
+  Linux with a glibc 2.35 baseline, Apple Silicon macOS, x86_64
+  Windows), each verified by SHA-256 at build time — OCR now actually
+  runs.
+
+### Added
+
+- Fail-closed build guard: a release-profile build now refuses to
+  compile against placeholder asset bytes instead of shipping a
+  broken binary.
+- Bundled-asset acceptance mode (`verify_acceptance --bundled-assets`)
+  and a real-engine end-to-end conversion driver exercised in CI on
+  all three platforms.
+
 ## [1.0.0] - 2026-10-18
 
 First stable release: the complete, fully offline scanned-PDF →
