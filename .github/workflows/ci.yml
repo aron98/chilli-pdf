@@ -70,11 +70,15 @@ jobs:
   # no scratch/system fallback) with in-Rust lopdf assertions on the
   # output structure, the overlay text and its language.
   #
-  # EXPECTED-RED until the real Tesseract/Leptonica pins land (tracked
-  # in the sibling branch): scripts/fetch-assets still copies the
-  # placeholder engine bytes for those slots today, so the build-time
-  # guard fails this job on purpose. When the real pins merge, this
-  # job turns green without any change here.
+  # Stack status: the real Tesseract/Leptonica pins land in this
+  # branch's stacked parent (feat/issue-42-native-libs). The job is
+  # EXPECTED-RED on every head that predates the pins — e.g. the
+  # fail-closed guard branch, or this branch before it is stacked on
+  # the native-libs branch: there scripts/fetch-assets still copies
+  # the placeholder engine bytes for those slots and the build-time
+  # guard fails the release build on purpose. Stacked on the pins,
+  # this branch's head must run the job GREEN — with no change to
+  # the job definition itself.
   e2e:
     name: e2e (${{ matrix.os }})
     strategy:

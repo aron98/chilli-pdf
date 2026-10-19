@@ -652,7 +652,7 @@ fn overlay_text(document: &Document, page: usize) -> Result<Option<String>, Stri
     let streams = contents_streams(document, &dict)?;
     let Some(overlay) = streams
         .iter()
-        .find(|bytes| String::from_utf8_lossy(bytes).contains("ChilliOcrF1"))
+        .find(|bytes| String::from_utf8_lossy(bytes).contains("/ChilliOcrF1"))
     else {
         return Ok(None);
     };

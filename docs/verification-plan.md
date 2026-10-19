@@ -162,7 +162,7 @@ Tesseract/Leptonica were substituted into the overlay (disclosed in
 `docs/verification-report.md`) — a substitution that can no longer
 pass unnoticed.
 
-### Real-engine e2e CI job (issue #42 item 2)
+### Real-engine e2e CI job (issue #42 item 4)
 
 `.github/workflows/ci.yml` runs an `e2e` job on the ubuntu/macos/windows
 matrix: `scripts/fetch-assets` (build-time network only — the shipped
@@ -175,11 +175,15 @@ overlay text non-empty and in the right language, no U+FFFD/mojibake,
 boxes/rotation/original content streams preserved, fixture SHA-256
 before/after, no temp residue.
 
-Status: ⏳ **expected-red until the real Tesseract/Leptonica pins land**
-(tracked in the sibling branch). Until then `scripts/fetch-assets`
-copies the placeholder bytes for those two slots, the build guard
-refuses the release build on purpose, and the job fails. When the real
-pins merge, the job turns green with no change to the job definition.
+Status: the job is EXPECTED-RED on every head that predates the real
+Tesseract/Leptonica pins — the fail-closed guard branch head, or this
+branch before it is stacked on the native-libs branch: there
+`scripts/fetch-assets` still copies the placeholder bytes for those
+two slots and the build guard refuses the release build on purpose.
+The pins land in this branch's stacked parent
+(`feat/issue-42-native-libs`), so on this branch's head the job runs
+GREEN — with no change to the job definition itself. ⏳ first actual
+CI run still pending (the branch has not been pushed yet).
 
 The CI `build` job now compiles the debug profile
 (`cargo build --locked`): release-profile compile coverage moved to the
