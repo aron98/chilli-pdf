@@ -24,7 +24,7 @@ gui = ["dep:eframe", "dep:rfd"]
 # Runtime dlopen of libtesseract: the OCR engine must load the native
 # library by absolute path from the extracted assets, so no build-time
 # linked tesseract crate is acceptable (see src/ocr/mod.rs).
-libloading = "0.8"
+libloading = "0.9"
 dirs = "7"
 hex = "0.4"
 include_dir = "0.7"
