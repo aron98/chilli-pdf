@@ -40,7 +40,7 @@ pdfium-render = "0.9"
 # pdfium-render is a read/render API — it cannot add font objects or append
 # content streams — so the overlay writer edits the original document with
 # lopdf instead. Default features (chrono dates, rayon) are unused here.
-lopdf = { version = "0.45", default-features = false }
+lopdf = { version = "0.46", default-features = false }
 
 [dev-dependencies]
 # Decoding the committed PNG test fixture in integration tests.
